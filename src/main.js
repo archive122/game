@@ -257,17 +257,21 @@ function hashRebuild() {
     arr.push(i);
   }
 }
-// 반경 질의 → 콜백(적 인덱스). 프레임 내 할당 없음.
-function hashQuery(x, z, radius, cb) {
+// 반경 질의 → 스크래치 배열에 적 인덱스 채움, 개수 반환. 프레임 내 할당·클로저 없음.
+// 주의: 반환 결과를 전부 소비한 뒤에만 다음 hashQuery를 호출할 것 (배열 재사용).
+const _qArr = new Int32Array(2048);
+function hashQuery(x, z, radius) {
+  let n = 0;
   const x0 = ((x - radius) / CELL) | 0, x1 = ((x + radius) / CELL) | 0;
   const z0 = ((z - radius) / CELL) | 0, z1 = ((z + radius) / CELL) | 0;
   for (let cx = x0; cx <= x1; cx++) {
     for (let cz = z0; cz <= z1; cz++) {
       const k = clamp(cx + HASH_OFF, 0, HASH_DIM - 1) * HASH_DIM + clamp(cz + HASH_OFF, 0, HASH_DIM - 1);
       const arr = hashMap.get(k);
-      if (arr) for (let i = 0; i < arr.length; i++) cb(arr[i]);
+      if (arr) for (let i = 0; i < arr.length && n < _qArr.length; i++) _qArr[n++] = arr[i];
     }
   }
+  return n;
 }
 
 // ─── 파티클 (InstancedMesh 큐브 1024, 링 커서) ──────────────────────────────
@@ -366,7 +370,8 @@ const projs = [];
 const projFree = [];
 for (let i = 0; i < PROJ_MAX; i++) projFree.push({
   x: 0, y: 0, z: 0, vx: 0, vz: 0, dmg: 0, pierce: 0, life: 0, speed: 0,
-  homing: false, blast: 0, byeok: false, color: 0xffd166, scale: 1, target: -1, retarget: 0,
+  homing: false, blast: 0, byeok: false, color: 0xffd166, scale: 1,
+  target: null, retarget: 0, lastHit: null,
 });
 function fireProjectile(x, z, dirX, dirZ, opts) {
   if (!projFree.length) return;
@@ -378,7 +383,7 @@ function fireProjectile(x, z, dirX, dirZ, opts) {
   p.life = (opts.range || 30) / opts.speed;
   p.homing = !!opts.homing; p.blast = opts.blast || 0;
   p.byeok = !!opts.byeok; p.color = opts.color || 0xffd166;
-  p.scale = opts.scale || 1; p.target = -1; p.retarget = 0;
+  p.scale = opts.scale || 1; p.target = null; p.retarget = 0; p.lastHit = null;
   projs.push(p);
 }
 
@@ -568,7 +573,7 @@ const bossMesh = new THREE.Mesh(dokkaebiGeom(),
   new THREE.MeshLambertMaterial({ color: 0x2a2a48, emissive: 0x4a1560, flatShading: true }));
 bossMesh.visible = false;
 scene.add(bossMesh);
-const boss = { active: false, x: 0, z: 0, hp: 0, slamT: 0, telegraphT: 0, tx: 0, tz: 0, kx: 0, kz: 0, flashT: 0 };
+const boss = { active: false, x: 0, z: 0, hp: 0, slamT: 0, telegraphT: 0, tx: 0, tz: 0, kx: 0, kz: 0, flashT: 0, orbitHitT: -9, waveId: -1 };
 
 // ─── 플레이어 ────────────────────────────────────────────────────────────────
 const playerGroup = new THREE.Group();
@@ -790,12 +795,31 @@ function recordDamage(amount) {
   run.dpsBuckets[run.dpsCursor] += amount;
 }
 
-// 피해는 즉시, 사망 처리는 지연 스윕 — 해시 질의 콜백이 든 인덱스가
+// 사운드 스로틀 — 호드 밀도에서 WebAudio 노드 폭주 방지
+let lastHitSfxT = 0, lastKillSfxT = 0;
+function sfxHitThrottled(big) {
+  const nw = performance.now();
+  if (nw - lastHitSfxT > 45) { lastHitSfxT = nw; sfx.hit(big); }
+}
+function sfxKillThrottled(elite) {
+  const nw = performance.now();
+  if (elite || nw - lastKillSfxT > 60) { lastKillSfxT = nw; sfx.kill(elite); }
+}
+
+// 피해는 즉시, 사망 처리는 지연 스윕 — 해시 질의로 얻은 인덱스가
 // 시뮬 틱 동안 절대 무효화되지 않도록 보장한다.
 function damageEnemy(i, dmg, dirX, dirZ, opts = {}) {
   const e = enemies[i];
   if (!e || e.dying) return;
-  const finalDmg = dmg * dmgMult();
+  let amp = dmgMult();
+  // 수호 등불 L5 취약 — 영역 내 적은 모든 피해 +15%
+  for (const tt of totems) {
+    if (tt.active && tt.vuln > 0 && (e.x - tt.x) ** 2 + (e.z - tt.z) ** 2 < tt.radius * tt.radius) {
+      amp *= 1 + tt.vuln;
+      break;
+    }
+  }
+  const finalDmg = dmg * amp;
   e.hp -= finalDmg;
   e.flashT = CONFIG.juice.flashDur;
   e.popT = 0.1;
@@ -804,11 +828,24 @@ function damageEnemy(i, dmg, dirX, dirZ, opts = {}) {
   recordDamage(finalDmg);
   if ((run.kills + i) % 2 === 0 || opts.byeok) // 숫자 스팸 절반 컷
     spawnDamageNumber(e.x, terrainH(e.x, e.z) + 1.6 + e.scale, e.z, finalDmg, !!opts.byeok);
-  sfx.hit(e.scale > 1.2);
+  sfxHitThrottled(e.scale > 1.2);
   if (e.hp <= 0) {
     e.dying = true;
     e.killDirX = dirX; e.killDirZ = dirZ; e.killByeok = !!opts.byeok;
   } else if (opts.byeok) hitstop(CONFIG.juice.hitstop.byeok);
+}
+
+function damageBoss(dmg, kx = 0, kz = 0, byeok = false) {
+  if (!boss.active) return;
+  const finalDmg = dmg * dmgMult();
+  boss.hp -= finalDmg;
+  boss.flashT = 0.08;
+  recordDamage(finalDmg);
+  spawnDamageNumber(boss.x, terrainH(boss.x, boss.z) + 5, boss.z, finalDmg, byeok);
+  boss.kx += kx; boss.kz += kz;
+  sfxHitThrottled(true);
+  if (byeok) hitstop(CONFIG.juice.hitstop.byeok);
+  if (boss.hp <= 0) killBoss();
 }
 
 function sweepDead() {
@@ -837,7 +874,7 @@ function sweepDead() {
       run.score = run.killScore;
     }
     hitstop(e.elite ? CONFIG.juice.hitstop.eliteKill : CONFIG.juice.hitstop.kill);
-    sfx.kill(!!e.elite);
+    sfxKillThrottled(!!e.elite);
 
     // 멀티킬 판정 (0.5초 내 8킬)
     const now = run.t;
@@ -927,6 +964,7 @@ function buildCardOptions(heroAll = false) {
 }
 
 let cardResolve = null;
+let inputGuardUntil = 0;   // 카드 더블클릭이 벽력일섬으로 새는 것 방지
 function openCards(heroAll = false) {
   state = 'cards';
   document.body.style.cursor = 'default';
@@ -936,6 +974,7 @@ function openCards(heroAll = false) {
   cardResolve = cards;
 }
 function pickCard(card) {
+  inputGuardUntil = performance.now() + 300;
   sfx.cardPick();
   if (card.kind === 'weapon-new') {
     run.weapons.push({ key: card.key, lv: card.to, ...WEAPONS[card.key], name: WEAPONS[card.key].name });
@@ -971,7 +1010,8 @@ function gainXP(n) {
   while (run.xp >= run.xpNext) {
     run.xp -= run.xpNext;
     run.level++;
-    const idx = Math.min(run.level - 2, CONFIG.xpCurve.length - 1);
+    // 레벨 L → L+1 에 xpCurve[L-1] 필요 (config 곡선표와 일치)
+    const idx = Math.min(run.level - 1, CONFIG.xpCurve.length - 1);
     run.xpNext = CONFIG.xpCurve[idx];
     run.pendingCards++;
   }
@@ -1024,6 +1064,7 @@ function sim(dt) {
     boss.z = clamp(run.z + Math.sin(a) * 24, -60, 60);
     boss.hp = CONFIG.boss.hp;
     boss.slamT = CONFIG.boss.slamPeriod; boss.telegraphT = 0; boss.kx = 0; boss.kz = 0; boss.flashT = 0;
+    boss.orbitHitT = -9; boss.waveId = -1;
     bossMesh.visible = true;
     addTrauma(0.4);
     sfx.bossRoar();
@@ -1129,17 +1170,20 @@ function sim(dt) {
     p.life -= dt;
     if (p.homing) {
       p.retarget -= dt;
-      if (p.retarget <= 0 || p.target >= enemies.length) {
+      // 대상은 객체 참조로 유지 — 스왑-팝 제거로 인덱스가 뒤틀리지 않게
+      if (p.retarget <= 0 || !p.target || p.target.dying || p.target.hp <= 0) {
         p.retarget = 0.2;
-        let best = -1, bestD = 1e9;
+        let best = null, bestD = 1e9;
         for (let i = 0; i < enemies.length; i++) {
-          const d = (enemies[i].x - p.x) ** 2 + (enemies[i].z - p.z) ** 2;
-          if (d < bestD) { bestD = d; best = i; }
+          const cand = enemies[i];
+          if (cand.dying) continue;
+          const d = (cand.x - p.x) ** 2 + (cand.z - p.z) ** 2;
+          if (d < bestD) { bestD = d; best = cand; }
         }
         p.target = best;
       }
-      if (p.target >= 0 && p.target < enemies.length) {
-        const e = enemies[p.target];
+      if (p.target) {
+        const e = p.target;
         const wantX = e.x - p.x, wantZ = e.z - p.z;
         const wl = Math.hypot(wantX, wantZ) || 1;
         const cur = Math.atan2(p.vz, p.vx), want = Math.atan2(wantZ / wl, wantX / wl);
@@ -1155,32 +1199,34 @@ function sim(dt) {
     p.y = terrainH(p.x, p.z) + 1.0;
     let dead = p.life <= 0;
     if (!dead) {
-      // 명중 판정 (해시 질의)
+      // 명중 판정 (해시 질의) — 죽어가는 적/관통 직전 적은 제외
       let hitIdx = -1;
-      hashQuery(p.x, p.z, 1.6, (i) => {
-        if (hitIdx >= 0) return;
+      const qn = hashQuery(p.x, p.z, 1.6);
+      for (let qi = 0; qi < qn; qi++) {
+        const i = _qArr[qi];
         const e = enemies[i];
+        if (e.dying || e === p.lastHit) continue;
         const dx = e.x - p.x, dz = e.z - p.z;
-        if (dx * dx + dz * dz < (e.radius + 0.35) ** 2) hitIdx = i;
-      });
+        if (dx * dx + dz * dz < (e.radius + 0.35) ** 2) { hitIdx = i; break; }
+      }
       if (hitIdx >= 0) {
-        const e = enemies[hitIdx];
         const dl = Math.hypot(p.vx, p.vz) || 1;
         if (p.blast > 0) {
           // 폭발 (유도 혼불 L5)
           burst(p.x, p.y, p.z, 10, 0x4dd8e6, 2, 6);
           const bl = p.blast;
-          const victims = [];
-          hashQuery(p.x, p.z, bl + 1, (i2) => {
+          const bn = hashQuery(p.x, p.z, bl + 1);
+          for (let qi = 0; qi < bn; qi++) {
+            const i2 = _qArr[qi];
             const e2 = enemies[i2];
-            if ((e2.x - p.x) ** 2 + (e2.z - p.z) ** 2 < bl * bl) victims.push(i2);
-          });
-          victims.sort((a2, b2) => b2 - a2);
-          for (const vi of victims) if (vi < enemies.length) damageEnemy(vi, p.dmg * (vi === hitIdx ? 1 : 0.5), (enemies[vi].x - p.x) / bl, (enemies[vi].z - p.z) / bl, {});
+            if (e2.dying) continue;
+            if ((e2.x - p.x) ** 2 + (e2.z - p.z) ** 2 < bl * bl)
+              damageEnemy(i2, p.dmg * (i2 === hitIdx ? 1 : 0.5), (e2.x - p.x) / bl, (e2.z - p.z) / bl, {});
+          }
           dead = true;
         } else {
           damageEnemy(hitIdx, p.dmg, p.vx / dl, p.vz / dl, { byeok: p.byeok, knockMult: p.byeok ? BYEOK.knockMult : 1 });
-          if (p.pierce > 0) p.pierce--;
+          if (p.pierce > 0) { p.pierce--; p.lastHit = enemies[hitIdx]; }
           else dead = true;
         }
       }
@@ -1194,6 +1240,9 @@ function sim(dt) {
 
   // ── 적 이동 + 접촉 (사망 스윕은 틱 마지막 — 해시 인덱스는 틱 내내 유효)
   const sepR = 1.2;
+  const auraForSlow = run.weapons.find((w) => w.key === 'aura');
+  const auraSlowL = auraForSlow ? WEAPONS.aura.levels[auraForSlow.lv - 1] : null;
+  const auraSlow = auraSlowL && auraSlowL.slow > 0 ? auraSlowL : null;
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     e.age += dt;
@@ -1206,8 +1255,10 @@ function sim(dt) {
     const dl = Math.hypot(dx, dz) || 1;
     dx /= dl; dz /= dl;
     let sepX = 0, sepZ = 0;
-    hashQuery(e.x, e.z, sepR, (j) => {
-      if (j === i) return;
+    const sn = hashQuery(e.x, e.z, sepR);
+    for (let qi = 0; qi < sn; qi++) {
+      const j = _qArr[qi];
+      if (j === i) continue;
       const o = enemies[j];
       const ox = e.x - o.x, oz = e.z - o.z;
       const od2 = ox * ox + oz * oz;
@@ -1216,13 +1267,15 @@ function sim(dt) {
         sepX += (ox / od) * (1 - od / sepR);
         sepZ += (oz / od) * (1 - od / sepR);
       }
-    });
-    // 토템 슬로우
+    }
+    // 토템·오라 슬로우
     let slowMult = 1;
     for (const tt of totems) {
       if (!tt.active) continue;
       if ((e.x - tt.x) ** 2 + (e.z - tt.z) ** 2 < tt.radius * tt.radius) slowMult = Math.min(slowMult, 1 - tt.slow);
     }
+    if (auraSlow && (e.x - run.x) ** 2 + (e.z - run.z) ** 2 < auraSlow.radius * auraSlow.radius)
+      slowMult = Math.min(slowMult, 1 - auraSlow.slow);
     const mv = e.speed * slowMult;
     e.x += (dx * mv + sepX * 1.5) * dt + e.kx * dt;
     e.z += (dz * mv + sepZ * 1.5) * dt + e.kz * dt;
@@ -1457,15 +1510,25 @@ function updateWeapons(dt) {
       for (let k = 0; k < L.count; k++) {
         const a = talismanAngle + (k / L.count) * Math.PI * 2;
         const tx = run.x + Math.cos(a) * L.radius, tz = run.z + Math.sin(a) * L.radius;
-        hashQuery(tx, tz, 1.4, (i) => {
+        const tn = hashQuery(tx, tz, 1.4);
+        for (let qi = 0; qi < tn; qi++) {
+          const i = _qArr[qi];
           const e = enemies[i];
-          if (run.t - e.orbitHitT < rehit) return;
+          if (e.dying || run.t - e.orbitHitT < rehit) continue;
           if ((e.x - tx) ** 2 + (e.z - tz) ** 2 < (e.radius + 0.5) ** 2) {
             e.orbitHitT = run.t;
             const dl = Math.hypot(e.x - run.x, e.z - run.z) || 1;
             damageEnemy(i, L.dmg, (e.x - run.x) / dl, (e.z - run.z) / dl, {});
           }
-        });
+        }
+        // 보스 간이 판정 (재타격 쿨 공유)
+        if (boss.active && run.t - boss.orbitHitT >= rehit) {
+          const br = 0.55 * CONFIG.boss.scale + 0.5;
+          if ((boss.x - tx) ** 2 + (boss.z - tz) ** 2 < br * br) {
+            boss.orbitHitT = run.t;
+            damageBoss(L.dmg, (boss.x - run.x) * 0.1, (boss.z - run.z) * 0.1, false);
+          }
+        }
       }
       talismanAngle += (L.degPerSec * Math.PI / 180) * dt;
     } else if (w.key === 'wave') {
@@ -1495,14 +1558,22 @@ function updateWeapons(dt) {
       if (run.weaponTimers.aura <= 0) {
         run.weaponTimers.aura = 1 / WEAPONS.aura.tickRate;
         const tick = L.dps / WEAPONS.aura.tickRate;
-        hashQuery(run.x, run.z, L.radius + 1, (i) => {
+        const an = hashQuery(run.x, run.z, L.radius + 1);
+        for (let qi = 0; qi < an; qi++) {
+          const i = _qArr[qi];
           const e = enemies[i];
+          if (e.dying) continue;
           const d2 = (e.x - run.x) ** 2 + (e.z - run.z) ** 2;
           if (d2 < L.radius * L.radius) {
             const d = Math.sqrt(d2) || 1;
             damageEnemy(i, tick, (e.x - run.x) / d, (e.z - run.z) / d, { knockMult: 0.15 });
           }
-        });
+        }
+        // 보스 간이 판정
+        if (boss.active) {
+          const bR = L.radius + 0.55 * CONFIG.boss.scale;
+          if ((boss.x - run.x) ** 2 + (boss.z - run.z) ** 2 < bR * bR) damageBoss(tick, 0, 0, false);
+        }
       }
     } else if (w.key === 'totem') {
       run.weaponTimers.totem = (run.weaponTimers.totem ?? 2) - dt;
@@ -1526,15 +1597,25 @@ function updateWeapons(dt) {
     wv.mesh.position.set(wv.x, terrainH(wv.x, wv.z) + 0.1, wv.z);
     wv.mesh.scale.setScalar(Math.max(0.01, r));
     wv.mesh.material.opacity = 0.8 * (1 - k);
-    hashQuery(wv.x, wv.z, r + 2, (i) => {
+    const wn = hashQuery(wv.x, wv.z, r + 2);
+    for (let qi = 0; qi < wn; qi++) {
+      const i = _qArr[qi];
       const e = enemies[i];
-      if (e.waveId === wv.id) return;
+      if (e.dying || e.waveId === wv.id) continue;
       const d = Math.hypot(e.x - wv.x, e.z - wv.z);
       if (Math.abs(d - r) < 1.0 + e.radius) {
         e.waveId = wv.id;
         damageEnemy(i, wv.dmg, (e.x - wv.x) / (d || 1), (e.z - wv.z) / (d || 1), { knockMult: wv.knock / 6 });
       }
-    });
+    }
+    // 보스 간이 판정
+    if (boss.active && boss.waveId !== wv.id) {
+      const bd = Math.hypot(boss.x - wv.x, boss.z - wv.z);
+      if (Math.abs(bd - r) < 1.0 + 0.55 * CONFIG.boss.scale) {
+        boss.waveId = wv.id;
+        damageBoss(wv.dmg, (boss.x - wv.x) / (bd || 1) * 0.8, (boss.z - wv.z) / (bd || 1) * 0.8, false);
+      }
+    }
     if (k >= 1) { wv.active = false; wv.mesh.visible = false; }
   }
   // 토템 갱신
@@ -1546,46 +1627,34 @@ function updateWeapons(dt) {
     if (tt.tickT <= 0) {
       tt.tickT = 0.25;
       const tick = tt.dps * 0.25;
-      hashQuery(tt.x, tt.z, tt.radius + 1, (i) => {
+      const on = hashQuery(tt.x, tt.z, tt.radius + 1);
+      for (let qi = 0; qi < on; qi++) {
+        const i = _qArr[qi];
         const e = enemies[i];
+        if (e.dying) continue;
         const d2 = (e.x - tt.x) ** 2 + (e.z - tt.z) ** 2;
         if (d2 < tt.radius * tt.radius) {
           const d = Math.sqrt(d2) || 1;
-          damageEnemy(i, tick * (1 + tt.vuln), (e.x - tt.x) / d, (e.z - tt.z) / d, { knockMult: 0.1 });
+          damageEnemy(i, tick, (e.x - tt.x) / d, (e.z - tt.z) / d, { knockMult: 0.1 });
         }
-      });
+      }
+      // 보스 간이 판정
+      if (boss.active && (boss.x - tt.x) ** 2 + (boss.z - tt.z) ** 2 < tt.radius * tt.radius)
+        damageBoss(tick, 0, 0, false);
     }
   }
-  // 보스 투사체 피해 (투사체 루프에서 boss는 해시에 없으므로 여기서 별도 판정)
+  // 보스 투사체 피해 (boss는 공간 해시에 없으므로 별도 판정)
   if (boss.active) {
     for (let pi = projs.length - 1; pi >= 0; pi--) {
+      if (!boss.active) break;
       const p = projs[pi];
       const br = 0.55 * CONFIG.boss.scale + 0.4;
       if ((p.x - boss.x) ** 2 + (p.z - boss.z) ** 2 < br * br) {
-        const finalDmg = p.dmg * dmgMult();
-        boss.hp -= finalDmg;
-        boss.flashT = 0.08;
-        recordDamage(finalDmg);
-        spawnDamageNumber(boss.x, terrainH(boss.x, boss.z) + 5, boss.z, finalDmg, p.byeok);
         const dl = Math.hypot(p.vx, p.vz) || 1;
-        boss.kx += (p.vx / dl) * 0.8; boss.kz += (p.vz / dl) * 0.8;
-        sfx.hit(true);
-        if (p.byeok) hitstop(CONFIG.juice.hitstop.byeok);
+        damageBoss(p.dmg, (p.vx / dl) * 0.8, (p.vz / dl) * 0.8, p.byeok);
         projs[pi] = projs[projs.length - 1];
         projs.pop();
         projFree.push(p);
-        if (boss.hp <= 0) killBoss();
-      }
-    }
-    // 오라·부적·파동은 간이 판정
-    const auraW = run.weapons.find((w) => w.key === 'aura');
-    if (auraW) {
-      const L = WEAPONS.aura.levels[auraW.lv - 1];
-      const br = 0.55 * CONFIG.boss.scale;
-      if ((boss.x - run.x) ** 2 + (boss.z - run.z) ** 2 < (L.radius + br) ** 2) {
-        boss.hp -= L.dps * dt * dmgMult();
-        recordDamage(L.dps * dt * dmgMult());
-        if (boss.hp <= 0) killBoss();
       }
     }
   }
@@ -1606,10 +1675,16 @@ function killBoss() {
   sfx.kill(true);
   ui.setBoss(false, 0);
   ui.toast('어둑시니를 쓰러뜨렸다!', 'gold');
-  // 보스 궤짝: 영웅 카드
-  chest.x = boss.x; chest.z = boss.z; chest.state = 'landed';
-  chestGroup.visible = true;
-  chestGroup.position.set(chest.x, terrainH(chest.x, chest.z), chest.z);
+  // 보스 궤짝: 영웅 카드 — 단, 미회수 보급 궤짝이 남아있으면 대신 도깨비불 추가 지급
+  if (chest.state === 'none' || chest.state === 'opened') {
+    chest.x = boss.x; chest.z = boss.z; chest.state = 'landed';
+    chestGroup.visible = true;
+    chestGroup.position.set(chest.x, terrainH(chest.x, chest.z), chest.z);
+    pillarMesh.visible = true;
+    pillarMesh.position.set(chest.x, 30, chest.z);
+  } else {
+    for (let i = 0; i < 10; i++) dropGem(boss.x + rand(-3, 3), boss.z + rand(-3, 3), 2);
+  }
   checkMissions();
 }
 
@@ -1944,7 +2019,9 @@ function updateVisuals(fd, simActive) {
       hudT = 0;
       ui.setScore(run.score);
       ui.setKills(run.kills);
-      ui.setCoins(meta.coins + coinsEarned());
+      // 종료 화면에서는 이미 meta에 합산됨 — 이중 계산 방지
+      const runEnding = state === 'dead' || state === 'victory' || state === 'dying';
+      ui.setCoins(meta.coins + (runEnding ? 0 : coinsEarned()));
       let dps = 0;
       for (let i = 0; i < 30; i++) dps += run.dpsBuckets[i];
       ui.setDPS(dps / 3);
@@ -1998,7 +2075,7 @@ renderer.setAnimationLoop(() => {
       acc -= STEP; steps++;
     }
     if (steps >= 6) acc = 0;
-    updateParticles(STEP * (hitstopT > 0 ? 0.3 : 1)); // 파티클은 히트스톱 영향 축소
+    updateParticles(fd * (hitstopT > 0 ? 0.3 : 1)); // 실제 프레임 시간 기준, 히트스톱 영향 축소
     updateDamageNumbers(fd);
   }
   updateVisuals(fd, simActive);
@@ -2024,8 +2101,18 @@ function simPassive(dt) {
 }
 
 // ─── 입력 ────────────────────────────────────────────────────────────────────
+// ev.code(물리 키) 기반 — 한글 입력 모드에서도 WASD·R이 동작한다
+const CODE_MAP = {
+  KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd',
+  ArrowUp: 'arrowup', ArrowDown: 'arrowdown', ArrowLeft: 'arrowleft', ArrowRight: 'arrowright',
+  ShiftLeft: 'shift', ShiftRight: 'shift', Space: ' ',
+  KeyR: 'r', Escape: 'escape',
+  Digit1: '1', Digit2: '2', Digit3: '3', Numpad1: '1', Numpad2: '2', Numpad3: '3',
+  Digit0: '0', Digit8: '8', Digit9: '9',
+};
 addEventListener('keydown', (ev) => {
-  const k = ev.key.toLowerCase();
+  const k = CODE_MAP[ev.code];
+  if (!k) return;
   keys[k] = true;
   if (k === 'shift' || k === ' ') { ev.preventDefault(); tryDash(); }
   if (k === 'r') {
@@ -2035,6 +2122,13 @@ addEventListener('keydown', (ev) => {
   if (k === 'escape') {
     if (state === 'playing') { state = 'paused'; document.body.style.cursor = 'default'; ui.showPause(); ui.setSoundLabel(getAudioEnabled()); }
     else if (state === 'paused') resumeFromPause();
+    else if (state === 'dead' || state === 'victory') {
+      // 산사(메뉴)로 복귀 — 상점·피부색·밤 선택 접근로
+      ui.hideDeath(); ui.hideVictory(); ui.showHud(false);
+      state = 'start';
+      document.body.style.cursor = 'default';
+      ui.showStart({ night: meta.night, best: meta.best, coins: meta.coins });
+    }
   }
   if (state === 'cards' && cardResolve) {
     if (k === '1') pickCard(cardResolve[0]);
@@ -2046,7 +2140,8 @@ addEventListener('keydown', (ev) => {
   if (k === '9') showStats = !showStats;
   if (k === '8') { godMode = !godMode; cheats = cheats || godMode; ui.toast(godMode ? '무적 ON (기록 비활성)' : '무적 OFF', 'teal'); }
 });
-addEventListener('keyup', (ev) => { keys[ev.key.toLowerCase()] = false; });
+addEventListener('keyup', (ev) => { const k = CODE_MAP[ev.code]; if (k) keys[k] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('mousemove', (ev) => { mouse.x = ev.clientX; mouse.y = ev.clientY; });
 addEventListener('mousedown', (ev) => {
   initAudio();
@@ -2056,15 +2151,22 @@ addEventListener('mousedown', (ev) => {
     if (ev.target.closest && ev.target.closest('.btn')) return;
     startRun();
   } else if (state === 'playing') {
+    if (performance.now() < inputGuardUntil) return;
     tryByeok();
   }
 });
 addEventListener('contextmenu', (ev) => ev.preventDefault());
 
 function resumeFromPause() {
+  ui.hidePause();
+  // 220ms 카드 타이머가 일시정지에 먹혔다면 여기서 복구
+  if (run.pendingCards > 0 && !cardTimerArmed) {
+    run.pendingCards--;
+    openCards();
+    return;
+  }
   state = 'playing';
   document.body.style.cursor = 'none';
-  ui.hidePause();
 }
 function restart() {
   ui.hideDeath(); ui.hideVictory(); ui.hideCards();
