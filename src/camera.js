@@ -95,6 +95,14 @@ export class GameCamera {
       } else {
         this.targetFov = F.fovBase;
       }
+      // 자가 치유: 어떤 이유로든 히어로가 프레임을 벗어나 있으면 즉시 등 뒤 스냅
+      this._v1.copy(hero.root.position);
+      this._v1.y += 1.2;
+      this._v1.project(this.cam);
+      if (this._v1.z > 1 || Math.abs(this._v1.x) > 1.25 || Math.abs(this._v1.y) > 1.35 ||
+          !Number.isFinite(this._v1.x)) {
+        this.snapBehindHero(hero);
+      }
       const heroPos = hero.root.position;
       if (hero.lockon && boss && boss.alive) {
         // 록온: 카메라 요를 보스 방향으로 서서히 견인

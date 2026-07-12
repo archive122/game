@@ -199,9 +199,19 @@ export class Hero {
 
   #buildRig() {
     // 층진 판금 + 곡면(캡슐/8각 원통) 위주 — 박스 실루엣 탈피
-    const armor = new THREE.MeshStandardMaterial({ color: 0x59647c, metalness: 0.8, roughness: 0.34, envMapIntensity: 2.2 });
-    const cloth = new THREE.MeshStandardMaterial({ color: 0x20263a, metalness: 0.04, roughness: 0.9, envMapIntensity: 0.5 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0xdde5f2, metalness: 0.94, roughness: 0.18, envMapIntensity: 2.4 });
+    // emissive 바닥값: 어두운 디스플레이에서도 캐릭터 실루엣 최소 밝기 보장
+    const armor = new THREE.MeshStandardMaterial({
+      color: 0x66718a, metalness: 0.8, roughness: 0.34, envMapIntensity: 2.2,
+      emissive: 0x151b28, emissiveIntensity: 1,
+    });
+    const cloth = new THREE.MeshStandardMaterial({
+      color: 0x272e45, metalness: 0.04, roughness: 0.9, envMapIntensity: 0.5,
+      emissive: 0x0a0d16, emissiveIntensity: 1,
+    });
+    const steel = new THREE.MeshStandardMaterial({
+      color: 0xdde5f2, metalness: 0.94, roughness: 0.18, envMapIntensity: 2.4,
+      emissive: 0x11151d, emissiveIntensity: 1,
+    });
     const crest = new THREE.MeshStandardMaterial({ color: 0x72241c, metalness: 0.05, roughness: 0.85, envMapIntensity: 0.6 });
     const trim = new THREE.MeshBasicMaterial({ fog: false });
     trim.color.setRGB(0.45, 2.2, 2.9);       // HDR 시안 — 블룸
@@ -353,7 +363,7 @@ export class Hero {
     [joints.thighR, joints.shinR] = mkLeg(1);
 
     // 캐릭터 필 라이트 — 어디서든 실루엣이 읽히도록 (그림자 없음, 저강도)
-    const fill = new THREE.PointLight(0x6f87ad, 4.0, 7, 1.6);
+    const fill = new THREE.PointLight(0x7d95bd, 5.5, 8, 1.6);
     fill.position.set(0, 2.3, 0);
     this.root.add(fill);
 
