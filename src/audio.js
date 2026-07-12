@@ -23,7 +23,7 @@ export class GameAudio {
     const c = this.ctx;
 
     this.master = c.createGain();
-    this.master.gain.value = 0.55;
+    this.master.gain.value = this.enabled ? 0.55 : 0;
     this.master.connect(c.destination);
 
     // 리버브 (대성당): 2.8초 지수 감쇠 노이즈 IR

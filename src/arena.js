@@ -47,6 +47,8 @@ function mergeGeoms(items) {
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   return g;
 }
+const _lerpA = new THREE.Color();
+const _lerpB = new THREE.Color();
 const M4 = (x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, s = 1, sy = null, sz = null) =>
   new THREE.Matrix4().compose(
     new THREE.Vector3(x, y, z),
@@ -566,8 +568,9 @@ export class Arena {
       const h = w * ((64 * lines.length + 40) / 512);
       const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
       m.rotation.x = -Math.PI / 2;
-      m.rotation.z = -ga - Math.PI / 2;
-      m.position.copy(inDir).multiplyScalar(21.5 - dist).setY(0.03);
+      m.rotation.z = Math.PI;   // 글자 위쪽이 진행 방향(중앙)을 향하도록
+      // 게이트 위치에서 중앙 방향으로 dist 만큼 들어온 지점
+      m.position.copy(inDir).multiplyScalar(dist - 21.5).setY(0.03);
       m.renderOrder = 2;
       this.group.add(m);
       return m;
@@ -669,7 +672,7 @@ export class Arena {
   #applyPhaseMix() {
     const t = this.phaseMix;
     const A = TUNING.palette.p1, B = TUNING.palette.p2;
-    const lerpC = (out, a, b) => out.copy(new THREE.Color(a)).lerp(new THREE.Color(b), t);
+    const lerpC = (out, a, b) => out.copy(_lerpA.set(a)).lerp(_lerpB.set(b), t);
     lerpC(this.scene.fog.color, A.fog, B.fog);
     lerpC(this.keyLight.color, A.key, B.key);
     this.keyLight.intensity = A.keyIntensity + (B.keyIntensity - A.keyIntensity) * t;

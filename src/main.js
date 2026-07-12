@@ -94,6 +94,8 @@ const RETRY_SPAWN = new THREE.Vector3(
 hero.reset(GATE_SPAWN);
 ui.showScreen('title');
 ui.setHud(false);
+// 풀링된 FX(초기 invisible)까지 포함해 셰이더를 미리 컴파일 — 전투 중 첫 사용 히치 방지
+renderer.compile(scene, camera);
 
 // ── 콜백 (전투 연출 훅) ────────────────────────────────────────────────────
 ctx.onHeroHurt = () => {
@@ -110,6 +112,7 @@ ctx.onHeroDeath = (patternName) => {
   audio.setPhase(0);
   deaths++;
   ui.setBossBar(false);
+  ui.setLetterbox(false);   // 페이즈 전환 직후 사망 시 레터박스 고착 방지
 };
 ctx.onBossGroggy = () => {
   ui.toast('파수꾼이 무너졌다 — E 처형');
@@ -201,12 +204,20 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 canvas.addEventListener('mousedown', (e) => {
   if (!canAct()) return;
-  if (document.pointerLockElement !== canvas) return;
+  if (document.pointerLockElement !== canvas) {
+    lockPointer();   // 복구 경로: 락이 풀린 채 전투 중이면 클릭으로 재잠금
+    return;
+  }
   if (e.button === 0) hero.onAttack();
   if (e.button === 2) hero.onHeavyStart();
 });
 window.addEventListener('mouseup', (e) => {
-  if (e.button === 2 && canAct()) hero.onHeavyRelease();
+  // 게이트 없이 항상 전달 — 일시정지 중 버튼을 떼도 차지가 고착되지 않게
+  if (e.button === 2) hero.onHeavyRelease();
+});
+window.addEventListener('blur', () => {
+  for (const k in keys) keys[k] = false;
+  hero.cancelHeavyCharge();
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('mousemove', (e) => {
@@ -214,7 +225,8 @@ window.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
-  if (!locked && (flow === 'approach' || flow === 'fight')) {
+  if (!locked && (flow === 'approach' || flow === 'fight' || flow === 'awaken' || flow === 'reset')) {
+    hero.cancelHeavyCharge();   // 재개 후 유령 차지 방지
     paused = true;
     ui.showScreen('pause');
   }
@@ -390,9 +402,8 @@ function frame(now) {
   if (flow !== 'title') {
     hero.update(dt, rawDt, heroInput);
   }
-  if (flow === 'fight' || flow === 'awaken' || flow === 'killcam' || flow === 'dead') {
-    boss.update(dt, rawDt);
-  }
+  // title/approach에서도 업데이트해야 dormant 무릎꿇기 포즈가 적용된다
+  boss.update(dt, rawDt);
   arena.update(rawDt, dt, gameTime);
   fx.update(dt, rawDt, gameTime);
   audio.update(rawDt);
@@ -416,7 +427,7 @@ function frame(now) {
     fpsEma += ((1 / Math.max(1e-3, rawDt || 1 / 60)) - fpsEma) * 0.04;
     ui.setStats(
       `${fpsEma.toFixed(0)} fps · tier ${governor.tier}\n` +
-      `calls ${renderer.info.render.calls} · tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k\n` +
+      `calls ${pipeline.sceneCalls} · tris ${((pipeline.sceneTris || 0) / 1000).toFixed(0)}k\n` +
       `boss ${boss.state} ${boss.hp.toFixed(0)}hp · hero ${hero.state} ${hero.hp.toFixed(0)}hp`);
   }
 }

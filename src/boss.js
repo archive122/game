@@ -255,6 +255,8 @@ export class Boss {
     this.pattern = null;
     this.recoverInvuln = 0;
     this.hitFlash = 0;
+    this.igniteBase = 0;
+    this.glowLevel = 0;
     this.trail.reset();
     this.bladeEdgeMat.color.setRGB(0, 0, 0);
     this.bodyMat.emissive.set(TUNING.palette.p1.crack);
@@ -276,7 +278,7 @@ export class Boss {
   get hpRatio() { return this.hp / B.hp; }
 
   takeHit(damage, groggyAmount, fromPos) {
-    if (!this.alive || this.state === 'dormant' || this.state === 'awaken' || this.recoverInvuln > 0) return;
+    if (!this.alive || this.state === 'dormant' || this.state === 'awaken' || this.recoverInvuln > 0) return false;
     this.hp = Math.max(0, this.hp - damage);
     this.hitFlash = 1;
     if (!this.groggy) {
@@ -285,6 +287,7 @@ export class Boss {
     }
     this.#checkPhase();
     if (this.hp <= 0) this.#die();
+    return true;
   }
 
   takeExecute() {
@@ -305,6 +308,7 @@ export class Boss {
     this.stateT = 0;
     this.inPunishWindow = true;
     this.pattern = null;
+    this.root.position.y = 0;   // 도약 중 그로기 — 공중 부양 방지
     this.trail.reset();
     this.#clearTelegraphs();
     this.ctx.audio?.sfx('groggyBreak');
@@ -325,6 +329,7 @@ export class Boss {
     this.state = 'dying';
     this.stateT = 0;
     this.inPunishWindow = false;
+    this.root.position.y = 0;   // 도약 중 사망 — 공중 부양 방지
     this.trail.reset();
     this.#clearTelegraphs();
     this.ctx.onBossDeath?.();
@@ -430,10 +435,10 @@ export class Boss {
   #spawnDecals(spec) {
     const hero = this.ctx.hero;
     if (spec.kind === 'firevent') {
-      // 히어로를 쫓는 순차 장판 3개
+      // 히어로를 쫓는 순차 장판 3개 — 첫 분출이 castRelease와 동기화되도록 지연
       for (let i = 0; i < spec.count; i++) {
         this.vents.push({
-          delay: i * 0.34,
+          delay: 0.55 + i * 0.34,
           fillTime: 0.8,
           t: -1,           // decal 미생성
           pos: null,
@@ -503,8 +508,8 @@ export class Boss {
       this.groggyGauge = Math.max(0, this.groggyGauge - B.groggy.decay * dt);
     }
 
-    // 페이즈 전환 (패턴 사이에만)
-    if (this.pendingPhase && (this.state === 'decide' || this.state === 'walk')) {
+    // 페이즈 전환 (패턴 사이 + 히어로 생존 시에만)
+    if (this.pendingPhase && hero.alive && (this.state === 'decide' || this.state === 'walk')) {
       this.phase = this.pendingPhase;
       this.pendingPhase = 0;
       this.state = 'transition';
@@ -555,30 +560,37 @@ export class Boss {
         else this.state = 'walk';
       }
     } else if (st === 'walk') {
-      if (!hero.alive) { this.state = 'decide'; this.idleWait = 2; }
-      this.#turnToward(hero, dt);
-      // 전진
-      const fwd = this._v1.set(Math.sin(this.facing), 0, Math.cos(this.facing));
-      this.root.position.addScaledVector(fwd, B.walkSpeed * dt);
-      this.#clampArena();
-      // 보행 사이클
-      this.walkPhase += dt * 2.4;
-      poseTarget = P.idle;
-      const s = Math.sin(this.walkPhase);
-      // 발구름 이벤트
-      if (Math.abs(s) > 0.96 && this.time - (this.lastStepTime || 0) > 0.5) {
-        this.lastStepTime = this.time;
-        this.ctx.audio?.sfx('bossStep');
-        this.ctx.gcam?.addTrauma(0.08);
-        const foot = this._v2.copy(this.root.position).addScaledVector(fwd, 1.2);
-        foot.x += Math.sign(s) * Math.cos(this.facing) * 0.8;
-        foot.z -= Math.sign(s) * Math.sin(this.facing) * 0.8;
-        foot.y = 0.15;
-        fx?.burst(foot, { count: 6, color: [0.9, 0.85, 0.8], speed: 1.6, life: 0.6, size: 2.4, grav: 2 });
+      if (!hero.alive) {
+        this.state = 'decide';
+        this.idleWait = 2;
+        poseTarget = P.idle;
+      } else {
+        this.#turnToward(hero, dt);
+        // 전진
+        const fwd = this._v1.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+        this.root.position.addScaledVector(fwd, B.walkSpeed * dt);
+        this.#clampArena();
+        // 보행 사이클
+        this.walkPhase += dt * 2.4;
+        poseTarget = P.idle;
+        const s = Math.sin(this.walkPhase);
+        // 발구름 이벤트
+        if (Math.abs(s) > 0.96 && this.time - (this.lastStepTime || 0) > 0.5) {
+          this.lastStepTime = this.time;
+          this.ctx.audio?.sfx('bossStep');
+          this.ctx.gcam?.addTrauma(0.08);
+          const foot = this._v2.copy(this.root.position).addScaledVector(fwd, 1.2);
+          foot.x += Math.sign(s) * Math.cos(this.facing) * 0.8;
+          foot.z -= Math.sign(s) * Math.sin(this.facing) * 0.8;
+          foot.y = 0.15;
+          fx?.burst(foot, { count: 6, color: [0.9, 0.85, 0.8], speed: 1.6, life: 0.6, size: 2.4, grav: 2 });
+        }
+        // 재선택 (확률 게이트를 먼저 — 매 프레임 후보 배열 할당 방지)
+        if (Math.random() < 2.2 * dt) {
+          const entry = this.#choosePattern();
+          if (entry) this.#startPattern(entry);
+        }
       }
-      // 재선택
-      const entry = this.#choosePattern();
-      if (entry && Math.random() < 2.2 * dt) this.#startPattern(entry);
     } else if (st === 'pattern') {
       const step = this.pattern.steps[this.stepIndex];
       const dur = this.#stepDur(step);

@@ -177,10 +177,18 @@ export class SwordTrail {
   // 활성 스윙 중 매 프레임 호출: base/tip 월드 좌표
   push(base, tip, time) {
     const i = this.head % TRAIL_SEGS;
-    this.positions.set([base.x, base.y, base.z], i * 6);
-    this.positions.set([tip.x, tip.y, tip.z], i * 6 + 3);
+    const p = this.positions;
+    p[i * 6] = base.x; p[i * 6 + 1] = base.y; p[i * 6 + 2] = base.z;
+    p[i * 6 + 3] = tip.x; p[i * 6 + 4] = tip.y; p[i * 6 + 5] = tip.z;
     this.births[i * 2] = time;
     this.births[i * 2 + 1] = time;
+    // 다음 세그먼트를 현재 위치의 퇴화 세그먼트로 — 이전 스트로크 좌표와
+    // 연결되는 반투명 시트 아티팩트 방지
+    const n = (i + 1) % TRAIL_SEGS;
+    p[n * 6] = base.x; p[n * 6 + 1] = base.y; p[n * 6 + 2] = base.z;
+    p[n * 6 + 3] = tip.x; p[n * 6 + 4] = tip.y; p[n * 6 + 5] = tip.z;
+    this.births[n * 2] = -100;
+    this.births[n * 2 + 1] = -100;
     this.head++;
     this.geom.attributes.position.needsUpdate = true;
     this.geom.attributes.aBirth.needsUpdate = true;
@@ -266,12 +274,12 @@ export class FX {
       this.flashes.push({ light: l, t: 1, dur: 1, peak: 0 });
     }
 
-    // ── 잔상 풀 (히어로 등록 후 사용) ──
+    // ── 잔상 풀 (히어로 등록 후 사용) — 세트별 개별 머티리얼로 독립 페이드 ──
     this.ghosts = [];
-    this.ghostMat = new THREE.MeshBasicMaterial({
+    this.ghostBaseMat = new THREE.MeshBasicMaterial({
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
     });
-    this.ghostMat.color.setRGB(0.25, 0.8, 1.1);
+    this.ghostBaseMat.color.setRGB(0.25, 0.8, 1.1);
 
     // ── 투사체/화염 기둥 대여 풀 ──
     this.crescents = [];
@@ -315,16 +323,16 @@ export class FX {
     this.emberAcc = 0;
   }
 
-  // ── 파티클 스폰 ──
+  // ── 파티클 스폰 (직접 인덱스 쓰기 — 임시 배열 할당 없음) ──
   spawn(pos, vel, life, size, r, g, b, grav) {
     const i = this.pCursor;
     this.pCursor = (this.pCursor + 1) % PARTICLE_CAP;
-    this.pPos.set([pos.x, pos.y, pos.z], i * 3);
-    this.pVel.set([vel.x, vel.y, vel.z], i * 3);
+    this.pPos[i * 3] = pos.x; this.pPos[i * 3 + 1] = pos.y; this.pPos[i * 3 + 2] = pos.z;
+    this.pVel[i * 3] = vel.x; this.pVel[i * 3 + 1] = vel.y; this.pVel[i * 3 + 2] = vel.z;
     this.pBirth[i] = this.time;
     this.pLife[i] = life;
     this.pSize[i] = size;
-    this.pColor.set([r, g, b], i * 3);
+    this.pColor[i * 3] = r; this.pColor[i * 3 + 1] = g; this.pColor[i * 3 + 2] = b;
     this.pGrav[i] = grav;
     this.pDirty = true;
   }
@@ -386,15 +394,16 @@ export class FX {
     const src = [];
     group.traverse(o => { if (o.isMesh) src.push(o); });
     for (let i = 0; i < 3; i++) {
+      const mat = this.ghostBaseMat.clone();
       const entries = src.map(m => {
-        const gm = new THREE.Mesh(m.geometry, this.ghostMat);
+        const gm = new THREE.Mesh(m.geometry, mat);
         gm.matrixAutoUpdate = false;
         gm.visible = false;
         gm.renderOrder = 4;
         this.scene.add(gm);
         return { src: m, ghost: gm };
       });
-      this.ghosts.push({ entries, t: 1, dur: 0.28 });
+      this.ghosts.push({ entries, mat, t: 1, dur: 0.28 });
     }
   }
   snapshotGhost() {
@@ -481,12 +490,11 @@ export class FX {
       f.t = Math.min(1, f.t + gameDt / f.dur);
       f.light.intensity = f.peak * (1 - f.t) * (1 - f.t);
     }
-    // 잔상
+    // 잔상 (세트별 독립 페이드)
     for (const g of this.ghosts) {
       if (g.t >= 1) continue;
       g.t = Math.min(1, g.t + rawDt / g.dur);
-      const a = 1 - g.t;
-      this.ghostMat.opacity = a * 0.5;
+      g.mat.opacity = (1 - g.t) * 0.5;
       if (g.t >= 1) for (const e of g.entries) e.ghost.visible = false;
     }
     // 화염 기둥 셰이더 시간

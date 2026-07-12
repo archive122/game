@@ -192,6 +192,7 @@ export class Hero {
     this.trail = new SwordTrail(scene, [0.5, 2.6, 3.4]);
     this._v1 = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
+    this._mv = new THREE.Vector3();   // 이동 방향 전용 — 임시 벡터와 별칭 금지
     this.pose = zeroPose(J);
   }
 
@@ -314,6 +315,13 @@ export class Hero {
     this.ctx.audio?.sfx('swingHeavy');
   }
   onRoll() { this.bufferRoll = this.time; }
+  cancelHeavyCharge() {
+    // 일시정지/포커스 이탈 시 차지를 조용히 취소 (스태미나는 릴리스 시점에 소모되므로 환불 불필요)
+    if (this.state !== 'heavy-charge') return;
+    this.state = 'idle';
+    this.charge = 0;
+    this.chargeFullNotified = false;
+  }
   onFlask() {
     if (!this.#canAct() || this.flasks <= 0 || this.hp >= H.hp) {
       // 그로기 보스 근접 시 E = 처형
@@ -368,6 +376,7 @@ export class Hero {
     this.clipName = name;
     this.stateT = 0;
     this.hasHit = false;
+    this.shockDone = false;
     this.trail.reset();
   }
 
@@ -401,6 +410,7 @@ export class Hero {
       if (this.state !== 'roll') {
         this.state = 'hurt';
         this.stateT = 0;
+        this.chargeFullNotified = false;
         if (fromPos) {
           this._v1.copy(this.root.position).sub(fromPos).setY(0).normalize();
           this.vel.addScaledVector(this._v1, 7);
@@ -447,9 +457,10 @@ export class Hero {
     while (dy < -Math.PI) dy += Math.PI * 2;
     if (Math.abs(dy) > arc) return;
     this.hasHit = true;
-    this.stats.hitsDealt++;
     const punish = boss.inPunishWindow ? H.punishMult : 1;
-    boss.takeHit(damage * heavyMult, groggy * heavyMult * punish, this.root.position);
+    // 무적(처형 직후 등) 중에는 유효타 피드백을 내지 않는다
+    if (!boss.takeHit(damage * heavyMult, groggy * heavyMult * punish, this.root.position)) return;
+    this.stats.hitsDealt++;
     const hitPos = this._v2.copy(this.root.position).addScaledVector(
       this._v1.set(Math.sin(this.facing), 0, Math.cos(this.facing)), Math.min(dist + boss.bodyRadius, 2.6)).setY(1.6);
     this.ctx.fx?.burst(hitPos, { count: 16, color: [4, 2.6, 1.0], speed: 6, life: 0.35, size: 2.2 });
@@ -485,7 +496,7 @@ export class Hero {
     const psi = camYaw + Math.PI;              // 카메라 전방각
     const wx = Math.sin(psi) * iz + Math.cos(psi) * ix;
     const wz = Math.cos(psi) * iz - Math.sin(psi) * ix;
-    const moveDir = this._v1.set(wx, 0, wz);
+    const moveDir = this._mv.set(wx, 0, wz);
     if (moveDir.lengthSq() > 1) moveDir.normalize();
 
     // ── 상태 머신 ──
@@ -624,7 +635,7 @@ export class Hero {
   }
 
   #doRoll(moveDir, moving) {
-    if (moving) this.rollDir.copy(moveDir).normalize();
+    if (moving) this.rollDir.copy(moveDir).setY(0).normalize();
     else this.rollDir.set(Math.sin(this.facing + Math.PI), 0, Math.cos(this.facing + Math.PI)); // 후방 스텝
     if (!this.lockon) this.facing = Math.atan2(this.rollDir.x, this.rollDir.z);
     this.state = 'roll';

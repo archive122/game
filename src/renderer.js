@@ -286,6 +286,9 @@ export class Pipeline {
     r.setRenderTarget(this.sceneRT);
     r.clear();
     r.render(scene, camera);
+    // 디버그 통계는 씬 패스 기준으로 (이후 풀스크린 패스들이 info를 덮어씀)
+    this.sceneCalls = r.info.render.calls;
+    this.sceneTris = r.info.render.triangles;
 
     // 2) 블룸 체인
     if (this.bloomOn) {

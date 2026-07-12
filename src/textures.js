@@ -62,7 +62,8 @@ function normalFromHeight(hc, strength = 2.0) {
                - (hAt(x + 1, y - 1) + 2 * hAt(x + 1, y) + hAt(x + 1, y + 1));
       const dy = (hAt(x - 1, y - 1) + 2 * hAt(x, y - 1) + hAt(x + 1, y - 1))
                - (hAt(x - 1, y + 1) + 2 * hAt(x, y + 1) + hAt(x + 1, y + 1));
-      let nx = dx * strength, ny = dy * strength, nz = 1;
+      // ny 부호: flipY 캔버스 텍스처 + OpenGL(G=위) 규약에 맞춤
+      let nx = dx * strength, ny = -dy * strength, nz = 1;
       const len = Math.hypot(nx, ny, nz);
       const i = (y * w + x) * 4;
       out.data[i] = ((nx / len) * 0.5 + 0.5) * 255;
