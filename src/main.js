@@ -86,6 +86,15 @@ let dbgSpeed = 1;
 let statsOn = false;
 let gameTime = 0;
 let rawTime = 0;
+let diagUntil = 0;          // 자가 진단 오버레이 표시 시한
+let diagShown = false;
+const _diagV = new THREE.Vector3();
+let gpuInfo = '?';
+try {
+  const gl = renderer.getContext();
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  gpuInfo = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.VERSION)).slice(0, 64);
+} catch { /* 무시 */ }
 
 const GATE_SPAWN = new THREE.Vector3(
   Math.cos(TUNING.arena.gateAngle) * 17.0, 0, Math.sin(TUNING.arena.gateAngle) * 17.0);
@@ -315,6 +324,8 @@ function startApproach() {
   gcam.setMode('game');
   gcam.yaw = hero.facing + Math.PI;   // 등 뒤에서 시작
   gcam.pitch = 0.18;
+  gcam.snapBehindHero(hero);
+  diagUntil = rawTime + 12;           // 시작 후 12초간 자가 진단 표시
   lockPointer();
 }
 
@@ -322,6 +333,7 @@ function startFight() {
   flow = 'fight';
   flowT = 0;
   fightTime = 0;
+  diagUntil = Math.max(diagUntil, rawTime + 8);
   ui.setLetterbox(false);
   ui.setBossBar(true);
   gcam.setMode('game');
@@ -349,6 +361,7 @@ function doReset() {
   gcam.setMode('game');
   gcam.yaw = hero.facing + Math.PI;
   gcam.trauma = 0;
+  gcam.snapBehindHero(hero);
   clock.setSlowmo(1, 0);
   audio.setPhase(1);
   lockPointer();
@@ -466,13 +479,32 @@ function frame(now) {
 
   pipeline.render(scene, camera, rawTime);
 
-  // 통계
-  if (statsOn) {
+  // 통계 / 자가 진단 (버그 리포트용 — 시작 후 12초 자동 표시, 9 토글)
+  const showDiag = statsOn || rawTime < diagUntil;
+  if (showDiag) {
     fpsEma += ((1 / Math.max(1e-3, rawDt || 1 / 60)) - fpsEma) * 0.04;
+    const hp2 = hero.root.position;
+    _diagV.set(hp2.x, hp2.y + 1.2, hp2.z).project(camera);
+    const onScreen = Math.abs(_diagV.x) < 1.05 && Math.abs(_diagV.y) < 1.05 && _diagV.z < 1;
+    let meshes = 0, badMatrix = false;
+    hero.root.traverse(o => {
+      if (o.isMesh) {
+        meshes++;
+        if (Number.isNaN(o.matrixWorld.elements[12])) badMatrix = true;
+      }
+    });
     ui.setStats(
-      `${fpsEma.toFixed(0)} fps · tier ${governor.tier}\n` +
-      `calls ${pipeline.sceneCalls} · tris ${((pipeline.sceneTris || 0) / 1000).toFixed(0)}k\n` +
-      `boss ${boss.state} ${boss.hp.toFixed(0)}hp · hero ${hero.state} ${hero.hp.toFixed(0)}hp`);
+      `${fpsEma.toFixed(0)} fps · tier ${governor.tier} · dpr ${(window.devicePixelRatio || 1).toFixed(2)}\n` +
+      `${gpuInfo}\n` +
+      `flow ${flow} · calls ${pipeline.sceneCalls} · tris ${((pipeline.sceneTris || 0) / 1000).toFixed(0)}k\n` +
+      `hero (${hp2.x.toFixed(1)}, ${hp2.y.toFixed(1)}, ${hp2.z.toFixed(1)}) ${hero.state} ${hero.hp.toFixed(0)}hp\n` +
+      `cam (${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}) ndc (${_diagV.x.toFixed(2)}, ${_diagV.y.toFixed(2)})\n` +
+      `화면 안 ${onScreen ? 'YES' : 'NO!'} · 메시 ${meshes} · 행렬 ${badMatrix ? 'NaN!' : 'ok'} · 씬 ${scene.children.includes(hero.root) ? 'ok' : 'MISSING!'}\n` +
+      `boss ${boss.state} ${boss.hp.toFixed(0)}hp`);
+    diagShown = true;
+  } else if (diagShown) {
+    diagShown = false;
+    ui.setStats('');
   }
 }
 requestAnimationFrame(frame);

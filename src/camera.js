@@ -48,6 +48,24 @@ export class GameCamera {
     this.mode = mode;
   }
 
+  // 전투 시작/재시작 시 히어로 등 뒤로 즉시 스냅 — 타이틀 오빗 위치에서
+  // 아레나를 가로질러 날아오는 전이(저사양에서 길어짐)를 제거한다
+  snapBehindHero(hero) {
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    const dir = this._v1.set(Math.sin(this.yaw) * cp, sp, Math.cos(this.yaw) * cp);
+    const side = this._v2.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    this.pos.copy(hero.root.position)
+      .add(this._v3.set(0, C.height, 0))
+      .addScaledVector(dir, C.distance)
+      .addScaledVector(side, C.shoulder);
+    const r = Math.hypot(this.pos.x, this.pos.z);
+    if (r > 20.4) { this.pos.x *= 20.4 / r; this.pos.z *= 20.4 / r; }
+    this.smoothPos.copy(this.pos);
+    this.smoothLook.copy(hero.root.position).add(this._v3.set(0, 1.45, 0));
+    this.cam.position.copy(this.smoothPos);
+    this.cam.lookAt(this.smoothLook);
+  }
+
   // 셰이크용 의사 펄린 (사인 합성)
   #noise(seed, t) {
     return (Math.sin(t * 31.7 + seed) * 0.55 + Math.sin(t * 17.3 + seed * 2.7) * 0.3 + Math.sin(t * 51.1 + seed * 1.3) * 0.15);
