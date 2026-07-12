@@ -193,6 +193,12 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyR' && (flow === 'deadScreen' || flow === 'victory')) retry();
   if (e.code === 'KeyM') { audio.setEnabled(!audio.enabled); }
+  // 포인터락 폴백 환경에서는 Esc가 락 해제 대신 직접 일시정지를 연다
+  if (e.code === 'Escape' && noLock && canAct()) {
+    hero.cancelHeavyCharge();
+    paused = true;
+    ui.showScreen('pause');
+  }
   // 디버그
   if (e.code === 'Digit8') { ctx.debugGod = !ctx.debugGod; ui.toast(ctx.debugGod ? '무적 ON' : '무적 OFF', 1); }
   if (e.code === 'Digit9') { statsOn = !statsOn; if (!statsOn) ui.setStats(''); }
@@ -202,11 +208,18 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
+// 포인터락 불가 환경(샌드박스 iframe 등) 폴백 — 락 없이도 조작 가능하게
+let noLock = false;
+document.addEventListener('pointerlockerror', () => { noLock = true; });
+
 canvas.addEventListener('mousedown', (e) => {
   if (!canAct()) return;
   if (document.pointerLockElement !== canvas) {
-    lockPointer();   // 복구 경로: 락이 풀린 채 전투 중이면 클릭으로 재잠금
-    return;
+    if (!noLock) {
+      lockPointer();   // 복구 경로: 락이 풀린 채 전투 중이면 클릭으로 재잠금
+      return;
+    }
+    // noLock: 락 없이 그대로 전투 입력으로 진행
   }
   if (e.button === 0) hero.onAttack();
   if (e.button === 2) hero.onHeavyStart();
@@ -221,7 +234,9 @@ window.addEventListener('blur', () => {
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement === canvas) gcam.applyMouse(e.movementX, e.movementY);
+  if (document.pointerLockElement === canvas || (noLock && canAct())) {
+    gcam.applyMouse(e.movementX, e.movementY);
+  }
 });
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
@@ -233,7 +248,11 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 function lockPointer() {
-  if (document.pointerLockElement !== canvas) canvas.requestPointerLock?.();
+  if (document.pointerLockElement === canvas) return;
+  try {
+    const p = canvas.requestPointerLock?.();
+    if (p && p.catch) p.catch(() => { noLock = true; });
+  } catch { noLock = true; }
 }
 
 document.getElementById('pause-screen').addEventListener('click', () => {
