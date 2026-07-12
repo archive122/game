@@ -8,7 +8,7 @@ import { enableHeightFog } from './renderer.js';
 import { makeFloorMaps, makePillarMaps, makeRuneRing, makeBannerMap, makeInscription, mulberry32 } from './textures.js';
 
 // ── 지오메트리 병합 (동일 머티리얼 정적 소품 → 드로우콜 1) ─────────────────────
-function mergeGeoms(items) {
+export function mergeGeoms(items) {
   let vCount = 0, iCount = 0;
   for (const { geom } of items) {
     vCount += geom.attributes.position.count;
@@ -49,7 +49,7 @@ function mergeGeoms(items) {
 }
 const _lerpA = new THREE.Color();
 const _lerpB = new THREE.Color();
-const M4 = (x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, s = 1, sy = null, sz = null) =>
+export const M4 = (x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, s = 1, sy = null, sz = null) =>
   new THREE.Matrix4().compose(
     new THREE.Vector3(x, y, z),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),

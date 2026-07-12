@@ -8,6 +8,7 @@ import { TUNING, PATTERNS } from './config.js';
 import { makeBossMaps } from './textures.js';
 import { SwordTrail, } from './fx.js';
 import { sampleClip, applyPose, zeroPose, makeEase } from './hero.js';
+import { mergeGeoms, M4 } from './arena.js';
 
 const B = TUNING.boss;
 const _euler = new THREE.Euler();
@@ -140,12 +141,32 @@ export class Boss {
     this.bladeEdgeMat = new THREE.MeshBasicMaterial({ fog: false });
     this.bladeEdgeMat.color.setRGB(0.0, 0.0, 0.0);   // 3페이즈 점화
 
-    const box = (w, h, d, mat, x = 0, y = 0, z = 0) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    // 용암 코어 / 관절 마그마 — 석판 틈으로 새어 나오는 내부 발광 (Elemental 골렘 문법)
+    this.coreMat = new THREE.MeshBasicMaterial({ fog: false });
+    this.coreMat.color.setRGB(2.6, 0.75, 0.14);
+    this.jointMat = new THREE.MeshBasicMaterial({ fog: false });   // 사지 관절은 은은하게
+    this.jointMat.color.setRGB(1.3, 0.36, 0.07);
+    const jointGlow = (parent, r, x = 0, y = 0, z = 0, mat = this.jointMat) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), mat);
       m.position.set(x, y, z);
-      m.castShadow = true; m.receiveShadow = true;
+      parent.add(m);
       return m;
     };
+    const cluster = (parent, mat, items) => {
+      const m = new THREE.Mesh(mergeGeoms(items), mat);
+      m.castShadow = true; m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+    const single = (parent, geom, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
+      const m = new THREE.Mesh(geom, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = true; m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+    const rock = (r, detail = 0) => new THREE.DodecahedronGeometry(r, detail);
 
     const joints = {};
     // 포즈 오프셋 전용 노드 — this.root(월드 이동)와 분리
@@ -154,69 +175,118 @@ export class Boss {
     this.root.add(poseRoot);
     joints.root = poseRoot;
 
+    // ── 골반: 중앙 블록 + 좌우 암석 힙 + 허리 코어 ──
     const pelvis = new THREE.Group(); pelvis.position.y = 3.75; poseRoot.add(pelvis); joints.pelvis = pelvis;
     joints.hips = pelvis;   // 포즈 호환 별칭
-    pelvis.add(box(1.7, 1.0, 1.1, this.bodyMat));
+    cluster(pelvis, this.bodyMat, [
+      { geom: new THREE.BoxGeometry(1.45, 0.9, 1.0), matrix: M4(0, -0.05, 0) },
+      { geom: rock(0.52), matrix: M4(-0.82, -0.15, 0, 0.4, 0.7, 0) },
+      { geom: rock(0.52), matrix: M4(0.82, -0.15, 0, 1.1, 0.2, 0.5) },
+    ]);
+    jointGlow(pelvis, 0.42, 0, 0.42, 0, this.coreMat);   // 허리 코어 (골반-몸통 틈)
 
+    // ── 몸통: 틈을 벌린 석판 클러스터 + 내부 용암 기둥 + 암석 어깨 ──
     const torso = new THREE.Group(); torso.position.y = 0.55; pelvis.add(torso); joints.torso = torso;
-    torso.add(box(2.15, 1.9, 1.35, this.bodyMat, 0, 1.0, 0));
-    torso.add(box(1.15, 1.0, 1.5, this.bodyMat, -1.45, 1.65, 0));  // 견갑 슬랩 L
-    torso.add(box(1.15, 1.0, 1.5, this.bodyMat, 1.45, 1.65, 0));
-    torso.add(box(1.0, 0.5, 0.5, this.darkMat, 0, 2.1, 0.35));      // 목 보호대
+    single(torso, new THREE.CylinderGeometry(0.52, 0.6, 2.5, 10), this.coreMat, 0, 0.95, 0)
+      .castShadow = false;                         // 내부 코어 기둥
+    cluster(torso, this.bodyMat, [
+      { geom: new THREE.BoxGeometry(1.9, 1.35, 0.62), matrix: M4(0, 1.28, 0.42, 0.1, 0, 0) },     // 가슴 슬랩
+      { geom: new THREE.BoxGeometry(1.55, 0.85, 0.55), matrix: M4(0, 0.32, 0.4, -0.06, 0, 0) },   // 복부 슬랩
+      { geom: new THREE.BoxGeometry(1.75, 1.7, 0.55), matrix: M4(0, 0.95, -0.48, -0.05, 0, 0) },  // 등 슬랩
+      { geom: new THREE.BoxGeometry(0.55, 1.5, 0.95), matrix: M4(-0.98, 0.9, 0, 0, 0, 0.08) },    // 옆판 L
+      { geom: new THREE.BoxGeometry(0.55, 1.5, 0.95), matrix: M4(0.98, 0.9, 0, 0, 0, -0.08) },    // 옆판 R
+      { geom: rock(0.8), matrix: M4(-1.5, 1.7, 0, 0.3, 0.5, 0.2) },                                // 암석 어깨 L
+      { geom: rock(0.8), matrix: M4(1.5, 1.7, 0, 0.9, 0.1, 0.7) },                                 // 암석 어깨 R
+      { geom: rock(0.34), matrix: M4(-1.15, 2.15, 0.25, 0.2, 0.4, 0.9) },                          // 어깨 파편
+      { geom: rock(0.3), matrix: M4(1.2, 2.2, -0.2, 0.8, 0.1, 0.3) },
+    ]);
+    jointGlow(torso, 0.2, 0, 2.15, 0.1, this.coreMat);   // 목 틈
 
+    // ── 머리: 투구형 두상 + 브로우 슬랩 + 왕관 파편 + 눈 ──
     const head = new THREE.Group(); head.position.y = 2.35; torso.add(head); joints.head = head;
-    head.add(box(0.72, 0.8, 0.78, this.bodyMat, 0, 0.3, 0));
+    cluster(head, this.bodyMat, [
+      { geom: new THREE.BoxGeometry(0.66, 0.72, 0.7), matrix: M4(0, 0.3, 0) },
+      { geom: new THREE.BoxGeometry(0.78, 0.22, 0.34), matrix: M4(0, 0.48, 0.24, -0.15, 0, 0) },  // 브로우
+      { geom: new THREE.BoxGeometry(0.3, 0.22, 0.2), matrix: M4(0, 0.06, 0.3, 0.2, 0, 0) },       // 턱
+      { geom: new THREE.ConeGeometry(0.11, 0.42, 4), matrix: M4(0, 0.74, -0.1, -0.25, 0.6, 0) },  // 왕관 파편
+      { geom: new THREE.ConeGeometry(0.09, 0.34, 4), matrix: M4(-0.22, 0.68, 0, -0.1, 0.2, -0.35) },
+      { geom: new THREE.ConeGeometry(0.09, 0.3, 4), matrix: M4(0.22, 0.66, 0, -0.1, 0.9, 0.3) },
+    ]);
     const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.085, 8, 6), this.eyeMat);
-    eyeL.position.set(-0.17, 0.34, 0.4);
+    eyeL.position.set(-0.17, 0.34, 0.37);
     const eyeR = eyeL.clone(); eyeR.position.x = 0.17;
     head.add(eyeL, eyeR);
 
+    // ── 팔: 석재 상완 + 팔꿈치 마그마 + 하완 + 암석 주먹 ──
     const mkArm = (side) => {
       const uArm = new THREE.Group();
       uArm.position.set(1.5 * side, 1.65, 0);
       torso.add(uArm);
-      uArm.add(box(0.72, 1.6, 0.72, this.bodyMat, 0, -0.8, 0));
+      cluster(uArm, this.bodyMat, [
+        { geom: new THREE.BoxGeometry(0.68, 1.35, 0.68), matrix: M4(0, -0.72, 0, 0, side * 0.3, 0) },
+        { geom: rock(0.3), matrix: M4(side * 0.12, -1.32, 0.1, 0.5, 0.2, 0.8) },
+      ]);
       const fArm = new THREE.Group();
       fArm.position.y = -1.6;
       uArm.add(fArm);
-      fArm.add(box(0.6, 1.5, 0.6, this.bodyMat, 0, -0.75, 0));
-      fArm.add(box(0.68, 0.5, 0.68, this.darkMat, 0, -1.45, 0));   // 주먹
+      jointGlow(fArm, 0.15, 0, 0.02, 0);           // 팔꿈치 마그마
+      cluster(fArm, this.bodyMat, [
+        { geom: new THREE.BoxGeometry(0.56, 1.3, 0.56), matrix: M4(0, -0.72, 0, 0, side * -0.25, 0) },
+      ]);
+      single(fArm, rock(0.44), this.darkMat, 0, -1.5, 0, 0.3, side * 0.5, 0.2);   // 주먹
       return [uArm, fArm];
     };
     [joints.uArmR, joints.fArmR] = mkArm(1);
     [joints.uArmL, joints.fArmL] = mkArm(-1);
 
-    // 대검 (4.2m)
+    // ── 대검 (4.2m): 테이퍼 블레이드 + 포인트 + 가드 + 포멜 ──
     const sword = new THREE.Group();
     sword.position.set(0, -1.5, 0.1);
     joints.fArmR.add(sword);
     {
-      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.9, 8), this.darkMat);
-      grip.position.y = -0.1;
-      const guard = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.16, 0.3), this.darkMat);
-      guard.position.y = 0.4;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.5, 3.9, 0.09), this.bladeMat);
-      blade.position.y = 2.4;
+      cluster(sword, this.darkMat, [
+        { geom: new THREE.CylinderGeometry(0.09, 0.11, 0.9, 8), matrix: M4(0, -0.1, 0) },
+        { geom: rock(0.17), matrix: M4(0, -0.6, 0) },                                              // 포멜
+        { geom: new THREE.BoxGeometry(1.15, 0.18, 0.3), matrix: M4(0, 0.4, 0) },
+        { geom: rock(0.15), matrix: M4(-0.56, 0.4, 0) },
+        { geom: rock(0.15), matrix: M4(0.56, 0.4, 0) },
+      ]);
+      const blade = new THREE.Mesh(mergeGeoms([
+        { geom: new THREE.BoxGeometry(0.48, 3.5, 0.09), matrix: M4(0, 2.25, 0) },
+        { geom: new THREE.ConeGeometry(0.3, 0.6, 4), matrix: M4(0, 4.28, 0, 0, Math.PI / 4, 0, 1, 1, 0.24) }, // 포인트
+      ]), this.bladeMat);
       blade.castShadow = true;
-      const edge = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.7, 0.11), this.bladeEdgeMat);
-      edge.position.set(0.22, 2.35, 0);
-      sword.add(grip, guard, blade, edge);
+      sword.add(blade);
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(0.09, 3.4, 0.1), this.bladeEdgeMat);
+      edge.position.set(0.21, 2.2, 0);
+      sword.add(edge);
       sword.rotation.x = Math.PI / 2;
       this.trailBase = new THREE.Object3D(); this.trailBase.position.y = 0.5; sword.add(this.trailBase);
-      this.trailTip = new THREE.Object3D(); this.trailTip.position.y = 4.3; sword.add(this.trailTip);
+      this.trailTip = new THREE.Object3D(); this.trailTip.position.y = 4.4; sword.add(this.trailTip);
     }
     this.sword = sword;
 
+    // ── 다리: 석재 대퇴 + 무릎 마그마 + 정강이 + 발 ──
     const mkLeg = (side) => {
       const thigh = new THREE.Group();
       thigh.position.set(0.62 * side, -0.4, 0);
       pelvis.add(thigh);
-      thigh.add(box(0.85, 1.7, 0.9, this.bodyMat, 0, -0.85, 0));
+      cluster(thigh, this.bodyMat, [
+        { geom: new THREE.BoxGeometry(0.82, 1.55, 0.88), matrix: M4(0, -0.82, 0, 0, side * 0.2, 0) },
+        { geom: rock(0.3), matrix: M4(side * 0.2, -0.3, 0.3, 0.7, 0.1, 0.4) },
+      ]);
       const shin = new THREE.Group();
       shin.position.y = -1.72;
       thigh.add(shin);
-      shin.add(box(0.72, 1.6, 0.8, this.bodyMat, 0, -0.8, 0));
-      shin.add(box(0.85, 0.4, 1.25, this.darkMat, 0, -1.62, 0.16)); // 발
+      jointGlow(shin, 0.14, 0, 0.02, 0.06);        // 무릎 마그마
+      cluster(shin, this.bodyMat, [
+        { geom: new THREE.BoxGeometry(0.68, 1.45, 0.76), matrix: M4(0, -0.78, 0, 0, side * -0.15, 0) },
+      ]);
+      cluster(shin, this.darkMat, [
+        { geom: new THREE.BoxGeometry(0.85, 0.4, 1.2), matrix: M4(0, -1.62, 0.16) },
+        { geom: rock(0.26), matrix: M4(-0.25, -1.66, 0.68, 0.3, 0.2, 0.6) },
+        { geom: rock(0.26), matrix: M4(0.25, -1.66, 0.68, 0.7, 0.9, 0.1) },
+      ]);
       return [thigh, shin];
     };
     [joints.thighL, joints.shinL] = mkLeg(-1);

@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { TUNING } from './config.js';
 import { SwordTrail } from './fx.js';
+import { mergeGeoms, M4 } from './arena.js';
 
 const H = TUNING.hero;
 
@@ -73,8 +74,8 @@ export function zeroPose(names) {
 const J = ['hips', 'torso', 'head', 'uArmR', 'fArmR', 'uArmL', 'fArmL', 'thighL', 'shinL', 'thighR', 'shinR', 'root'];
 
 const P = {
-  idle: { uArmR: [0.35, 0, -0.18], fArmR: [-0.55, 0, 0], uArmL: [0.25, 0, 0.15], fArmL: [-0.4, 0, 0], torso: [0.06, 0, 0], root: [0, 0, 0] },
-  guard: { uArmR: [0.5, 0, -0.3], fArmR: [-0.9, 0, 0], uArmL: [0.4, 0.3, 0.35], fArmL: [-0.7, 0, 0], torso: [0.12, 0.15, 0] },
+  idle: { uArmR: [0.3, 0, -0.4], fArmR: [-0.85, 0, -0.12], uArmL: [0.22, 0, 0.3], fArmL: [-0.5, 0, 0.08], torso: [0.06, 0, 0], root: [0, 0, 0] },
+  guard: { uArmR: [0.45, 0, -0.42], fArmR: [-1.05, 0, -0.12], uArmL: [0.4, 0.3, 0.4], fArmL: [-0.75, 0, 0.08], torso: [0.12, 0.15, 0] },
   // 약공 1: 우→좌 횡베기
   sl1a: { uArmR: [-1.9, 0, -1.1], fArmR: [-0.4, 0, 0], torso: [0.05, -0.75, 0], hips: [0, -0.3, 0], head: [0, 0.5, 0] },
   sl1b: { uArmR: [0.6, 0, 1.25], fArmR: [-0.1, 0, 0], torso: [0.16, 0.85, 0], hips: [0, 0.4, 0], head: [0, -0.3, 0] },
@@ -197,17 +198,28 @@ export class Hero {
   }
 
   #buildRig() {
-    const armor = new THREE.MeshStandardMaterial({ color: 0x4d5769, metalness: 0.72, roughness: 0.42, envMapIntensity: 2.0 });
-    const cloth = new THREE.MeshStandardMaterial({ color: 0x1d222e, metalness: 0.05, roughness: 0.92, envMapIntensity: 0.5 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0xd6deeb, metalness: 0.92, roughness: 0.2, envMapIntensity: 2.2 });
+    // 층진 판금 + 곡면(캡슐/8각 원통) 위주 — 박스 실루엣 탈피
+    const armor = new THREE.MeshStandardMaterial({ color: 0x59647c, metalness: 0.8, roughness: 0.34, envMapIntensity: 2.2 });
+    const cloth = new THREE.MeshStandardMaterial({ color: 0x20263a, metalness: 0.04, roughness: 0.9, envMapIntensity: 0.5 });
+    const steel = new THREE.MeshStandardMaterial({ color: 0xdde5f2, metalness: 0.94, roughness: 0.18, envMapIntensity: 2.4 });
+    const crest = new THREE.MeshStandardMaterial({ color: 0x72241c, metalness: 0.05, roughness: 0.85, envMapIntensity: 0.6 });
     const trim = new THREE.MeshBasicMaterial({ fog: false });
     trim.color.setRGB(0.45, 2.2, 2.9);       // HDR 시안 — 블룸
     this.mats = { armor, cloth, steel, trim };
 
-    const box = (w, h, d, mat, x = 0, y = 0, z = 0) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    // 병합 파트 헬퍼: 같은 조인트·같은 머티리얼 클러스터 → 메시 1개
+    const cluster = (parent, mat, items, shadow = true) => {
+      const m = new THREE.Mesh(mergeGeoms(items), mat);
+      m.castShadow = shadow;
+      parent.add(m);
+      return m;
+    };
+    const single = (parent, geom, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, shadow = true) => {
+      const m = new THREE.Mesh(geom, mat);
       m.position.set(x, y, z);
-      m.castShadow = true;
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = shadow;
+      parent.add(m);
       return m;
     };
 
@@ -218,71 +230,123 @@ export class Hero {
     this.root.add(poseRoot);
     joints.root = poseRoot;
 
+    // ── 골반: 허리 밴드 + 2단 폴드(치마 갑) + 버클 ──
     const hips = new THREE.Group(); hips.position.y = 0.97; poseRoot.add(hips); joints.hips = hips;
-    hips.add(box(0.36, 0.24, 0.26, armor, 0, 0.02, 0));
-    hips.add(box(0.4, 0.3, 0.3, cloth, 0, -0.16, 0));      // 치마 갑
+    cluster(hips, armor, [
+      { geom: new THREE.CylinderGeometry(0.175, 0.185, 0.15, 8), matrix: M4(0, 0.03, 0, 0, 0, 0, 1, 1, 0.8) },
+      { geom: new THREE.CylinderGeometry(0.19, 0.24, 0.14, 8, 1, true), matrix: M4(0, -0.1, 0, 0, 0, 0, 1, 1, 0.82) },
+      { geom: new THREE.CylinderGeometry(0.24, 0.28, 0.12, 8, 1, true), matrix: M4(0, -0.22, 0, 0, 0, 0, 1, 1, 0.84) },
+    ]);
+    single(hips, new THREE.BoxGeometry(0.07, 0.07, 0.03), steel, 0, 0.03, 0.15, 0, 0, Math.PI / 4, false); // 버클
 
+    // ── 몸통: 8각 퀴레스 + 목가리개 + 2겹 폴드론 ──
     const torso = new THREE.Group(); torso.position.y = 0.18; hips.add(torso); joints.torso = torso;
-    torso.add(box(0.42, 0.5, 0.3, armor, 0, 0.3, 0));
-    torso.add(box(0.46, 0.2, 0.34, armor, 0, 0.5, 0));     // 흉갑 상단
-    torso.add(box(0.2, 0.26, 0.2, armor, -0.31, 0.52, 0)); // 견갑 L
-    torso.add(box(0.2, 0.26, 0.2, armor, 0.31, 0.52, 0));  // 견갑 R
+    single(torso, new THREE.BoxGeometry(0.22, 0.46, 0.14), cloth, 0, 0.27, 0);   // 속옷(틈 메움 — 퀴레스 안쪽)
+    single(torso, new THREE.CylinderGeometry(0.085, 0.1, 0.2, 8), cloth, 0, 0.64, 0, 0, 0, 0, false);  // 목 (구멍 메움)
+    cluster(torso, armor, [
+      { geom: new THREE.CylinderGeometry(0.215, 0.17, 0.5, 8), matrix: M4(0, 0.3, 0, 0, 0, 0, 1, 1, 0.74) },     // 퀴레스
+      { geom: new THREE.CylinderGeometry(0.13, 0.15, 0.09, 8), matrix: M4(0, 0.58, 0, 0, 0, 0, 1, 1, 0.85) },    // 거짓
+      { geom: new THREE.BoxGeometry(0.38, 0.26, 0.05), matrix: M4(0, 0.5, -0.12, 0.1, 0, 0) },                    // 백플레이트 (목 뒤 틈 차단)
+      { geom: new THREE.BoxGeometry(0.2, 0.26, 0.05), matrix: M4(0, 0.36, 0.145, -0.12, 0, 0) },                  // 흉갑 능선
+      // 폴드론 (좌/우, 겉판 + 아랫판)
+      { geom: new THREE.SphereGeometry(0.112, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.55), matrix: M4(-0.295, 0.53, 0) },
+      { geom: new THREE.SphereGeometry(0.112, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.55), matrix: M4(0.295, 0.53, 0) },
+      { geom: new THREE.CylinderGeometry(0.115, 0.14, 0.06, 8), matrix: M4(-0.3, 0.46, 0) },
+      { geom: new THREE.CylinderGeometry(0.115, 0.14, 0.06, 8), matrix: M4(0.3, 0.46, 0) },
+    ]);
 
+    // 망토 — 어깨에 고정, 버텍스 셰이더 바람 + 이동 빌로우
+    this.capeUniforms = { uCTime: { value: 0 }, uCSway: { value: 0 } };
+    const capeMat = new THREE.MeshStandardMaterial({
+      color: 0x1f0d10, metalness: 0.02, roughness: 0.95, side: THREE.DoubleSide, envMapIntensity: 0.35,
+    });
+    capeMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uCTime = this.capeUniforms.uCTime;
+      shader.uniforms.uCSway = this.capeUniforms.uCSway;
+      shader.vertexShader = ('uniform float uCTime;\nuniform float uCSway;\n' + shader.vertexShader).replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         float hang = 1.0 - uv.y;
+         transformed.z -= hang * hang * uCSway * 0.42;
+         transformed.x += sin(uCTime * 2.3 + uv.y * 6.0) * hang * (0.035 + uCSway * 0.05);
+         transformed.z += sin(uCTime * 3.1 + uv.x * 5.0 + uv.y * 4.0) * hang * 0.03;`);
+    };
+    capeMat.customProgramCacheKey = () => 'heroCape';
+    const capeGeom = new THREE.PlaneGeometry(0.46, 0.88, 4, 9);
+    capeGeom.translate(0, -0.44, 0);   // 상단 모서리가 피벗
+    this.cape = new THREE.Mesh(capeGeom, capeMat);
+    this.cape.position.set(0, 0.5, -0.19);
+    this.cape.rotation.x = 0.12;
+    this.cape.castShadow = true;
+    this.cape.userData.noGhost = true;   // 잔상 복제 제외 (셰이더 변형이 복제되지 않음)
+    torso.add(this.cape);
+
+    // ── 머리: 그레이트헬름 + 크레스트 + 바이저 슬릿 ──
     const head = new THREE.Group(); head.position.y = 0.72; torso.add(head); joints.head = head;
-    {
-      const helm = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.145, 0.2, 12), armor);
-      helm.position.y = 0.1; helm.castShadow = true;
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.135, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), armor);
-      dome.position.y = 0.2; dome.castShadow = true;
-      const visor = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.024, 0.02), trim);
-      visor.position.set(0, 0.1, 0.135);
-      head.add(helm, dome, visor);
-    }
+    cluster(head, armor, [
+      { geom: new THREE.CylinderGeometry(0.135, 0.145, 0.21, 10), matrix: M4(0, 0.1, 0, 0, 0, 0, 1, 1, 0.95) },
+      { geom: new THREE.SphereGeometry(0.138, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), matrix: M4(0, 0.195, 0) },
+      { geom: new THREE.BoxGeometry(0.21, 0.05, 0.17), matrix: M4(0, 0.14, 0.05, -0.1, 0, 0) },   // 챙
+    ]);
+    single(head, new THREE.BoxGeometry(0.015, 0.1, 0.3), crest, 0, 0.29, -0.02, -0.18, 0, 0);      // 크레스트 핀
+    single(head, new THREE.BoxGeometry(0.16, 0.022, 0.02), trim, 0, 0.1, 0.128, 0, 0, 0, false);   // 바이저 슬릿
 
+    // ── 팔: 캡슐 상완/하완 + 팔꿈치 카우터 + 건틀릿 ──
     const mkArm = (side) => {   // side: 1 = R, -1 = L
       const uArm = new THREE.Group();
       uArm.position.set(0.31 * side, 0.5, 0);
       torso.add(uArm);
-      uArm.add(box(0.11, 0.34, 0.11, armor, 0, -0.17, 0));
+      single(uArm, new THREE.CapsuleGeometry(0.052, 0.2, 3, 8), armor, 0, -0.16, 0);
       const fArm = new THREE.Group();
       fArm.position.y = -0.34;
       uArm.add(fArm);
-      fArm.add(box(0.1, 0.32, 0.1, armor, 0, -0.16, 0));
+      single(fArm, new THREE.SphereGeometry(0.06, 8, 6), armor, 0, 0.01, 0);                        // 카우터
+      single(fArm, new THREE.CapsuleGeometry(0.046, 0.17, 3, 8), cloth, 0, -0.14, 0);
+      single(fArm, new THREE.CylinderGeometry(0.062, 0.075, 0.12, 8), armor, 0, -0.26, 0);          // 건틀릿 커프
+      single(fArm, new THREE.BoxGeometry(0.08, 0.09, 0.09), armor, 0, -0.33, 0.01);                 // 주먹
       return [uArm, fArm];
     };
     [joints.uArmR, joints.fArmR] = mkArm(1);
     [joints.uArmL, joints.fArmL] = mkArm(-1);
 
-    // 장검 (오른손)
+    // ── 장검 (오른손): 테이퍼 블레이드 + 포인트 + 곡선 가드 + 포멜 ──
     const sword = new THREE.Group();
     sword.position.set(0, -0.34, 0.02);
     joints.fArmR.add(sword);
     {
-      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.028, 0.22, 8), cloth);
-      const guard = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.06), steel);
-      guard.position.y = 0.12;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.055, 1.06, 0.014), steel);
-      blade.position.y = 0.66;
-      blade.castShadow = true;
-      const rune = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.98, 0.016), trim);
-      rune.position.y = 0.66;
-      sword.add(grip, guard, blade, rune);
+      single(sword, new THREE.CylinderGeometry(0.024, 0.028, 0.2, 8), cloth, 0, 0.0, 0, 0, 0, 0, false);
+      single(sword, new THREE.SphereGeometry(0.032, 8, 6), steel, 0, -0.11, 0, 0, 0, 0, false);     // 포멜
+      cluster(sword, steel, [
+        { geom: new THREE.BoxGeometry(0.2, 0.028, 0.05), matrix: M4(0, 0.12, 0) },                   // 가드
+        { geom: new THREE.SphereGeometry(0.026, 6, 5), matrix: M4(-0.1, 0.12, 0) },
+        { geom: new THREE.SphereGeometry(0.026, 6, 5), matrix: M4(0.1, 0.12, 0) },
+        { geom: new THREE.BoxGeometry(0.055, 0.94, 0.013), matrix: M4(0, 0.62, 0) },                 // 블레이드
+        { geom: new THREE.ConeGeometry(0.031, 0.13, 4), matrix: M4(0, 1.15, 0, 0, Math.PI / 4, 0, 1, 1, 0.32) }, // 포인트
+      ]);
+      const rune = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.9, 0.015), trim);
+      rune.position.y = 0.6;
+      sword.add(rune);
       sword.rotation.x = Math.PI / 2;   // 기본 파지: 전방
       this.trailBase = new THREE.Object3D(); this.trailBase.position.y = 0.16; sword.add(this.trailBase);
-      this.trailTip = new THREE.Object3D(); this.trailTip.position.y = 1.2; sword.add(this.trailTip);
+      this.trailTip = new THREE.Object3D(); this.trailTip.position.y = 1.21; sword.add(this.trailTip);
     }
     this.sword = sword;
 
+    // ── 다리: 캡슐 + 무릎 폴린 + 그리브 + 사바톤 ──
     const mkLeg = (side) => {
       const thigh = new THREE.Group();
       thigh.position.set(0.13 * side, -0.02, 0);
       hips.add(thigh);
-      thigh.add(box(0.14, 0.42, 0.15, cloth, 0, -0.21, 0));
+      single(thigh, new THREE.CapsuleGeometry(0.066, 0.26, 3, 8), cloth, 0, -0.2, 0);
       const shin = new THREE.Group();
       shin.position.y = -0.44;
       thigh.add(shin);
-      shin.add(box(0.13, 0.42, 0.14, armor, 0, -0.21, 0));
-      shin.add(box(0.14, 0.09, 0.24, armor, 0, -0.44, 0.04));  // 발
+      single(shin, new THREE.SphereGeometry(0.07, 8, 6), armor, 0, 0.0, 0.01);                      // 폴린
+      cluster(shin, armor, [
+        { geom: new THREE.CylinderGeometry(0.062, 0.075, 0.3, 8), matrix: M4(0, -0.2, 0, 0, 0, 0, 1, 1, 0.9) },  // 그리브
+        { geom: new THREE.BoxGeometry(0.11, 0.08, 0.22), matrix: M4(0, -0.44, 0.045) },              // 사바톤
+        { geom: new THREE.CylinderGeometry(0.055, 0.055, 0.08, 8), matrix: M4(0, -0.44, 0.14, Math.PI / 2, 0, 0, 1, 1, 0.7) }, // 발끝
+      ]);
       return [thigh, shin];
     };
     [joints.thighL, joints.shinL] = mkLeg(-1);
@@ -716,6 +780,11 @@ export class Hero {
     }
     applyPose(this.joints, this.pose, blend);
     this.trail.update(this.time);
+
+    // 망토: 게임 시간 구동(히트스톱에 함께 멈춤) + 이동 속도 빌로우
+    this.capeUniforms.uCTime.value = this.time;
+    const swayTarget = Math.min(1, this.vel.length() / H.moveSpeed);
+    this.capeUniforms.uCSway.value += (swayTarget - this.capeUniforms.uCSway.value) * Math.min(1, 6 * dt);
   }
 
   #poseTo(target) {

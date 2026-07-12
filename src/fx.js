@@ -392,7 +392,7 @@ export class FX {
   registerGhostSource(group) {
     // 히어로의 메시 목록에서 잔상 풀 3개 생성
     const src = [];
-    group.traverse(o => { if (o.isMesh) src.push(o); });
+    group.traverse(o => { if (o.isMesh && !o.userData.noGhost) src.push(o); });
     for (let i = 0; i < 3; i++) {
       const mat = this.ghostBaseMat.clone();
       const entries = src.map(m => {

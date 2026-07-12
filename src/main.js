@@ -435,7 +435,7 @@ requestAnimationFrame(frame);
 
 // E2E/디버그 핸들 (게임플레이에는 영향 없음)
 window.__DUEL = {
-  ctx, clock, hero, boss, arena, pipeline, gcam, ui,
+  ctx, clock, hero, boss, arena, pipeline, gcam, ui, THREE,
   get flow() { return flow; },
   set flow(v) { flow = v; },
   get paused() { return paused; },
