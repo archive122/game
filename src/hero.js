@@ -529,6 +529,7 @@ export class Hero {
       this._v1.set(Math.sin(this.facing), 0, Math.cos(this.facing)), Math.min(dist + boss.bodyRadius, 2.6)).setY(1.6);
     this.ctx.fx?.burst(hitPos, { count: 16, color: [4, 2.6, 1.0], speed: 6, life: 0.35, size: 2.2 });
     this.ctx.fx?.flash(hitPos, [1, 0.8, 0.5], 26, 0.18);
+    this.ctx.fx?.sparks(hitPos, this.combo === -1 ? 16 : 9, [4.2, 3, 1.4], 8);
     const isHeavy = this.combo === -1;
     this.ctx.clock?.hitstop(isHeavy ? H.heavy.hitstop : H.light.hitstop);
     this.ctx.gcam?.addTrauma(isHeavy ? TUNING.feel.shakeHit * 1.6 : TUNING.feel.shakeHit);

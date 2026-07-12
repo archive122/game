@@ -3,12 +3,14 @@
 > 무너진 대성당, 달빛이 쏟아지는 성소. 8m 석상 거인 **잿불 파수꾼**과의 단 한 번의 결투.
 > 죽고, 배우고, 다시 도전하라 — 유일한 성장 자원은 **패턴 지식**이다.
 
-**언리얼 엔진의 룩**을 목표로 브라우저에서 절차적으로만 구현한 **소울라이크 1:1 보스 결투 액션**입니다.
-3D 모델·텍스처·사운드 파일이 전혀 없습니다 — 지오메트리는 코드, 텍스처는 Canvas, 소리는 WebAudio 신스로 태어났습니다.
+**언리얼 엔진의 룩**을 목표로 브라우저에서 구현한 **소울라이크 1:1 보스 결투 액션**입니다.
+지오메트리·캐릭터·사운드는 코드로 절차 생성하고, 표면 질감·밤하늘·파티클 스프라이트는
+엄선한 **CC0 에셋**(ambientCG PBR 텍스처 · Poly Haven 나이트 HDRI · Kenney 파티클 팩)으로
+덧입혔습니다 — 출처는 [ATTRIBUTION.md](ATTRIBUTION.md) 참고.
 
 ![장르](https://img.shields.io/badge/장르-소울라이크%20보스%20결투-8b1a1a)
 ![엔진](https://img.shields.io/badge/Three.js-r185-4dd8e6)
-![에셋](https://img.shields.io/badge/외부%20에셋-0개-ffd166)
+![에셋](https://img.shields.io/badge/에셋-절차%20생성%20%2B%20CC0-ffd166)
 ![플레이타임](https://img.shields.io/badge/1런-6~10분-9cf)
 
 ## 실행 방법

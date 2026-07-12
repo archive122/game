@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { TUNING } from './config.js';
 import { enableHeightFog } from './renderer.js';
 import { makeFloorMaps, makePillarMaps, makeRuneRing, makeBannerMap, makeInscription, mulberry32 } from './textures.js';
+import { repeatOf } from './assets.js';
 
 // ── 지오메트리 병합 (동일 머티리얼 정적 소품 → 드로우콜 1) ─────────────────────
 export function mergeGeoms(items) {
@@ -239,6 +240,7 @@ export class Arena {
       }));
     sky.renderOrder = -10;
     this.group.add(sky);
+    this.sky = sky;
   }
 
   // ── 바닥 ──
@@ -254,6 +256,7 @@ export class Arena {
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     this.group.add(floor);
+    this.floorMat = mat;
 
     // 외곽 침식 지반 (안개 속으로)
     const outerMat = new THREE.MeshStandardMaterial({ color: 0x171b24, roughness: 1 });
@@ -365,11 +368,12 @@ export class Arena {
     const wall = new THREE.Mesh(mergeGeoms(items), mat);
     wall.castShadow = true; wall.receiveShadow = true;
     this.group.add(wall);
+    this.wallMat = mat;
 
     // 반파 돔 셸 (달 반대편 하늘 반쪽을 덮음)
     const domeGeom = new THREE.SphereGeometry(23.5, 28, 12, Math.PI * 0.62, Math.PI * 1.05, 0, Math.PI * 0.46);
     const dome = new THREE.Mesh(domeGeom, new THREE.MeshStandardMaterial({
-      color: 0x232833, roughness: 1, metalness: 0, side: THREE.DoubleSide, envMapIntensity: 0.25,
+      color: 0x14181f, roughness: 1, metalness: 0, side: THREE.DoubleSide, envMapIntensity: 0.2,
     }));
     enableHeightFog(dome.material);
     dome.position.y = 1.5;
@@ -599,6 +603,75 @@ export class Arena {
     }
   }
 
+  // ── CC0 외부 에셋 적용 — 실패한 항목은 절차적 원본 유지 ──
+  applyExternalAssets(assets, renderer, fx) {
+    const T = assets.tex;
+    // 바닥: 실사 판석 PBR
+    if (T.floorColor && T.floorNormal && T.floorRough) {
+      this.floorMat.map = repeatOf(T.floorColor, 9, 9);
+      this.floorMat.normalMap = repeatOf(T.floorNormal, 9, 9);
+      this.floorMat.roughnessMap = repeatOf(T.floorRough, 9, 9);
+      this.floorMat.normalScale.set(1.0, 1.0);
+      this.floorMat.roughness = 0.92;
+      this.floorMat.color.setHex(0x4f5866);   // 밤의 남색 틴트 (곱연산)
+      this.floorMat.needsUpdate = true;
+    }
+    // 기둥/외벽: 암석 PBR
+    if (T.rockColor && T.rockNormal) {
+      this.pillarMat.map = repeatOf(T.rockColor, 1, 2);
+      this.pillarMat.normalMap = repeatOf(T.rockNormal, 1, 2);
+      if (T.rockRough) this.pillarMat.roughnessMap = repeatOf(T.rockRough, 1, 2);
+      this.pillarMat.normalScale.set(1.0, 1.0);
+      this.pillarMat.color.setHex(0x7d8595);   // 밤 틴트
+      this.pillarMat.needsUpdate = true;
+      this.wallMat.map = repeatOf(T.rockColor, 2, 1);
+      this.wallMat.normalMap = repeatOf(T.rockNormal, 2, 1);
+      this.wallMat.color.setHex(0x3a4250);   // 맵 곱연산 보정 — 실루엣 유지
+      this.wallMat.needsUpdate = true;
+    }
+    // 하늘/환경: 나이트 HDRI (은하수) + 달 글로우 스프라이트
+    if (assets.hdr && renderer) {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const envRT = pmrem.fromEquirectangular(assets.hdr);
+      this.scene.environment = envRT.texture;
+      pmrem.dispose();
+      this.scene.background = assets.hdr;
+      this.scene.backgroundIntensity = 0.1;    // 심야 — 지평선 잔광만 은은하게
+      this.scene.environmentIntensity = 0.5;
+      this.scene.backgroundRotation = new THREE.Euler(0, Math.PI * 0.65, 0);
+      this.sky.visible = false;
+      if (T.glow) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: T.glow, transparent: true, blending: THREE.AdditiveBlending,
+          depthWrite: false, fog: false,
+        });
+        mat.color.setRGB(2.4, 2.8, 3.6);   // HDR — 블룸이 문다
+        this.moonSprite = new THREE.Mesh(new THREE.PlaneGeometry(46, 46), mat);
+        this.moonSprite.position.copy(this.moonDir).multiplyScalar(190);
+        this.moonSprite.lookAt(0, 0, 0);
+        this.moonSprite.renderOrder = -9;
+        this.group.add(this.moonSprite);
+      }
+    }
+    // 화로: 화염 빌보드 + 연기 기둥
+    if (T.flameTall) {
+      for (const b of this.braziers) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: T.flameTall, transparent: true, blending: THREE.AdditiveBlending,
+          depthWrite: false, fog: false,
+        });
+        mat.color.setRGB(3.2, 1.6, 0.5);
+        const flame = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 1.6), mat);
+        flame.position.set(b.pos.x, b.pos.y + 0.62, b.pos.z);
+        flame.renderOrder = 7;
+        this.group.add(flame);
+        b.flame = flame;
+        b.core.scale.setScalar(0.55);   // 스프라이트가 주연, 코어는 심지로
+        if (fx) fx.addSmokeEmitter(new THREE.Vector3(b.pos.x, b.pos.y + 1.3, b.pos.z), 1.6);
+      }
+    }
+  }
+
   // ── 환경맵 베이크 (PMREM) ──
   bakeEnvironment(renderer) {
     const envScene = new THREE.Scene();
@@ -684,12 +757,19 @@ export class Arena {
     lerpC(this.skyUniforms.uMoonColor.value, A.moon, B.moon);
     for (const m of this.godrayMats) lerpC(m.uniforms.uColor.value, A.moon, B.moon);
     lerpC(this.dustMat.uniforms.uColor.value, A.moon, B.moon);
+    // HDRI 배경/달 스프라이트도 함께 물든다
+    if (this.scene.background && this.scene.background.isTexture) {
+      this.scene.backgroundIntensity = 0.1 - t * 0.045;
+    }
+    if (this.moonSprite) {
+      this.moonSprite.material.color.setRGB(2.4 + t * 1.4, 2.8 - t * 1.7, 3.6 - t * 3.0);
+    }
     // 룬은 페이즈 2에서 더 뜨겁게
     const rs = 2.4 + t * 2.2;
     this.runeMat.color.setRGB(rs, 1.1 - t * 0.35, 0.35 - t * 0.1);
   }
 
-  update(rawDt, gameDt, time) {
+  update(rawDt, gameDt, time, camera) {
     this.time = time;
     this.skyUniforms.uTime.value = time;
     this.windUniform.value = time;
@@ -703,7 +783,16 @@ export class Arena {
         + 0.06 * Math.sin(time * 23.7 + b.seed * 5)
         + 0.04 * Math.sin(time * 3.3 + b.seed * 17);
       b.light.intensity = 14 * f * (1 + this.phaseMix * 0.5);
-      b.core.scale.setScalar(0.9 + 0.14 * f);
+      if (b.flame) {
+        // 화염 빌보드: 카메라 정면 + 플리커 스케일/기울임
+        if (camera) b.flame.quaternion.copy(camera.quaternion);
+        b.flame.scale.set(0.9 + 0.16 * Math.sin(time * 13 + b.seed * 7), 0.86 + 0.24 * f, 1);
+        b.flame.rotation.z += Math.sin(time * 5 + b.seed * 3) * 0.045;
+        b.flame.material.opacity = 0.75 + 0.25 * f;
+        b.core.scale.setScalar(0.5 + 0.08 * f);
+      } else {
+        b.core.scale.setScalar(0.9 + 0.14 * f);
+      }
     }
 
     // 룬 맥동

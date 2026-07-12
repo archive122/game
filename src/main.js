@@ -16,6 +16,7 @@ import { Boss } from './boss.js';
 import { GameAudio } from './audio.js';
 import { UI } from './ui.js';
 import { makeSoftDot } from './textures.js';
+import { loadAssets, ASSETS } from './assets.js';
 
 // ── 기반 ──────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('game');
@@ -97,6 +98,25 @@ ui.setHud(false);
 // 풀링된 FX(초기 invisible)까지 포함해 셰이더를 미리 컴파일 — 전투 중 첫 사용 히치 방지
 renderer.compile(scene, camera);
 
+// ── 외부 에셋(CC0) 사전 로딩 — 실패해도 절차적 폴백으로 시작 가능 ──
+{
+  const startBtn = document.getElementById('start-btn');
+  const startLabel = startBtn.textContent;
+  startBtn.disabled = true;
+  startBtn.textContent = '불러오는 중…';
+  loadAssets((p) => { startBtn.textContent = `불러오는 중 ${(p * 100) | 0}%`; })
+    .then(() => {
+      arena.applyExternalAssets(ASSETS, renderer, fx);
+      fx.applyExternalAssets(ASSETS);
+      renderer.compile(scene, camera);
+    })
+    .catch(() => {})
+    .finally(() => {
+      startBtn.disabled = false;
+      startBtn.textContent = startLabel;
+    });
+}
+
 // ── 콜백 (전투 연출 훅) ────────────────────────────────────────────────────
 ctx.onHeroHurt = () => {
   pipeline.compMat.uniforms.uHurt.value = 1;
@@ -128,6 +148,8 @@ ctx.onBossDeath = () => {
   audio.setPhase(0);
   fx.burst(new THREE.Vector3().copy(boss.root.position).setY(4.5),
     { count: 120, color: [4, 1.6, 0.4], speed: 6, up: 4, life: 1.6, size: 2.6, grav: 1 });
+  fx.smokePuff(boss.root.position, 14, { size: 5, spread: 4, life: 3.5 });
+  fx.sparks(new THREE.Vector3().copy(boss.root.position).setY(4), 30, [4, 1.8, 0.5], 8);
   gcam.addTrauma(0.5);
 };
 ctx.onPhaseTransition = (phase) => {
@@ -163,6 +185,9 @@ ctx.onExecuteStrike = () => {
   fx.burst(p, { count: 90, color: [0.7, 2.8, 3.2], speed: 8, up: 3, life: 0.9, size: 2.6, grav: 4 });
   fx.ring(boss.root.position, { maxR: 7, dur: 0.6, color: [0.8, 2.6, 3] });
   fx.flash(p, [0.5, 0.9, 1], 90, 0.5);
+  fx.muzzleFlash(p, [0.7, 2.6, 3.2], 10, 0.35);
+  fx.sparks(p, 24, [0.9, 3, 3.4], 9);
+  fx.smokePuff(boss.root.position, 8, { size: 4, color: [0.05, 0.09, 0.11] });
   hero.heal(0.12);   // 처형 회복 — 전진 보상
 };
 ctx.onExecuteEnd = () => {
@@ -423,8 +448,8 @@ function frame(now) {
   }
   // title/approach에서도 업데이트해야 dormant 무릎꿇기 포즈가 적용된다
   boss.update(dt, rawDt);
-  arena.update(rawDt, dt, gameTime);
-  fx.update(dt, rawDt, gameTime);
+  arena.update(rawDt, dt, gameTime, camera);
+  fx.update(dt, rawDt, gameTime, camera);
   audio.update(rawDt);
   gcam.update(rawDt, ctx);
   ui.update(rawDt, ctx, camera);

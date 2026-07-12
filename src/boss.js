@@ -498,6 +498,11 @@ export class Boss {
     this.ctx.fx?.ring(pos, { maxR: step.hit ? step.hit.r1 : 5, dur: 0.5, color });
     this.ctx.fx?.burst(pos, { count: 34, color: [3.5, 1.8, 0.7], speed: 8, up: 5, life: 0.7, size: 2.8, grav: 12 });
     this.ctx.fx?.flash(pos, [1, 0.7, 0.4], 70, 0.35);
+    this.ctx.fx?.richImpact(pos, {
+      r: step.hit ? step.hit.r1 * 0.6 : 3, color,
+      sparkCount: step.impact === 'stomp' ? 10 : 18,
+      smokeCount: step.impact === 'stomp' ? 4 : 8,
+    });
     this.ctx.gcam?.addTrauma(step.shake || 0.4);
     this.ctx.audio?.sfx('slamImpact');
   }
@@ -727,6 +732,7 @@ export class Boss {
         p.y = 1 + Math.random() * 5;
         p.z += (Math.random() - 0.5) * 3;
         fx?.burst(p, { count: 8, color: [4, 1.5, 0.4], speed: 2.5, life: 1.4, size: 2, grav: -1.5 });
+        fx?.smokePuff(p, 2, { size: 2.6, up: 1.2, life: 3 });
       }
     }
 
@@ -837,6 +843,9 @@ export class Boss {
         this.ctx.audio?.sfx('fireBurst');
         fx.burst(this._v1.copy(v.pos).setY(0.4), { count: 26, color: [4, 1.5, 0.3], speed: 4, up: 8, life: 0.9, size: 3, grav: 6 });
         fx.flash(v.pos, [1, 0.55, 0.2], 55, 0.5);
+        fx.firePuffs(this._v1.copy(v.pos).setY(0.5), 12, { size: 3.6, up: 5 });
+        fx.smokePuff(v.pos, 4, { size: 2.6, up: 2.4, life: 2.6 });
+        fx.scorch(v.pos, 2.8);
       }
       if (v.col) {
         const colT = (v.t - v.fillTime) / 0.9;
@@ -891,6 +900,8 @@ export class Boss {
         }
         fx.ring(r.target, { maxR: 2.6, dur: 0.4, color: [3.4, 1.2, 0.3] });
         fx.burst(this._v1.copy(r.target).setY(0.3), { count: 18, color: [4, 1.6, 0.4], speed: 5, up: 4, life: 0.6, size: 2.4, grav: 8 });
+        fx.firePuffs(this._v1.copy(r.target).setY(0.3), 5, { size: 4.5, up: 3 });
+        fx.sparks(this._v1.copy(r.target).setY(0.5), 7, [4, 2, 0.6], 6);
         this.ctx.audio?.sfx('rainImpact');
         if (r.mesh) fx.release(r.mesh);
         this.rains.splice(i, 1);

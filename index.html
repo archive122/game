@@ -36,6 +36,7 @@
   .title-rule { width: 320px; height: 1px; margin: 34px 0 26px; background: linear-gradient(90deg, transparent, rgba(207,224,245,0.5), transparent); }
   #start-btn { font-family: inherit; font-size: 19px; letter-spacing: 0.42em; text-indent: 0.42em; padding: 15px 46px; color: var(--ink); background: rgba(16,22,34,0.55); border: 1px solid rgba(160,190,230,0.35); cursor: pointer; transition: all 0.25s; backdrop-filter: blur(3px); }
   #start-btn:hover { border-color: var(--ember); color: #fff; box-shadow: 0 0 26px rgba(255,122,46,0.3); background: rgba(30,20,14,0.55); }
+  #start-btn:disabled { opacity: 0.45; cursor: default; pointer-events: none; }
   .controls-hint { margin-top: 36px; font-size: 13px; line-height: 2.1; color: var(--dim); letter-spacing: 0.08em; }
   .controls-hint b { color: var(--ink); font-weight: 600; }
   .title-foot { position: absolute; bottom: 3.2vh; font-size: 11px; letter-spacing: 0.3em; color: #46536b; }
@@ -136,7 +137,7 @@
     <b>W A S D</b> 이동 · <b>마우스</b> 시선 · <b>좌클릭</b> 베기 · <b>우클릭 꾹</b> 강타<br>
     <b>SPACE / SHIFT</b> 구르기(무적) · <b>Q</b> 주시 · <b>E</b> 성수 / 처형 · <b>M</b> 소리
   </div>
-  <div class="title-foot">외부 에셋 없음 — 모든 것은 코드에서 태어났다</div>
+  <div class="title-foot">절차 생성 코드 + CC0 에셋 — Kenney · ambientCG · Poly Haven</div>
 </div>
 
 <!-- HUD -->

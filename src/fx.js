@@ -201,6 +201,113 @@ export class SwordTrail {
   update(time) { this.mat.uniforms.uTime.value = time; }
 }
 
+// ── 텍스처 스프라이트 풀 (회전/성장 지원, 스테이트리스 GPU) ────────────────────
+const SPRITE_VERT = /* glsl */`
+  attribute vec3 aVel;
+  attribute float aBirth;
+  attribute float aLife;
+  attribute float aSize;
+  attribute vec3 aColor;
+  attribute float aGrav;
+  attribute float aRot;
+  attribute float aSpin;
+  uniform float uTime;
+  uniform float uGrow;      // 0 = 수축(불꽃/스파크), 1 = 팽창(연기)
+  varying vec3 vColor;
+  varying float vFade;
+  varying float vRot;
+  void main() {
+    float age = uTime - aBirth;
+    float t = clamp(age / max(aLife, 1e-4), 0.0, 1.0);
+    vec3 p = position + aVel * age + vec3(0.0, -0.5 * aGrav * age * age, 0.0);
+    vFade = smoothstep(0.0, 0.09, t) * (1.0 - t) * step(0.0, age) * step(age, aLife);
+    vColor = aColor;
+    vRot = aRot + aSpin * age;
+    float sizeCurve = mix(1.0 - t * 0.45, 1.0 + t * 1.6, uGrow);
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    gl_PointSize = min(300.0, aSize * sizeCurve * (240.0 / max(0.1, -mv.z))) * step(0.001, vFade);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const SPRITE_FRAG = /* glsl */`
+  uniform sampler2D uMap;
+  uniform float uOpacity;
+  varying vec3 vColor;
+  varying float vFade;
+  varying float vRot;
+  void main() {
+    if (vFade <= 0.001) discard;
+    vec2 uvc = gl_PointCoord - 0.5;
+    float c = cos(vRot), s = sin(vRot);
+    uvc = mat2(c, -s, s, c) * uvc;
+    if (abs(uvc.x) > 0.5 || abs(uvc.y) > 0.5) discard;
+    vec4 tx = texture2D(uMap, uvc + 0.5);
+    #ifdef ADDITIVE
+      gl_FragColor = vec4(vColor * tx.a * vFade * uOpacity, 1.0);
+    #else
+      gl_FragColor = vec4(vColor, tx.a * vFade * uOpacity);
+    #endif
+  }
+`;
+
+class SpritePool {
+  constructor(scene, map, { capacity = 384, additive = true, grow = 0, opacity = 1 } = {}) {
+    this.cap = capacity;
+    this.cursor = 0;
+    const g = new THREE.BufferGeometry();
+    this.attrs = {};
+    const mk = (name, itemSize, fill = 0) => {
+      const a = new Float32Array(capacity * itemSize).fill(fill);
+      this.attrs[name] = a;
+      g.setAttribute(name, new THREE.BufferAttribute(a, itemSize));
+    };
+    mk('position', 3); mk('aVel', 3); mk('aBirth', 1, -1000); mk('aLife', 1, 1);
+    mk('aSize', 1); mk('aColor', 3); mk('aGrav', 1); mk('aRot', 1); mk('aSpin', 1);
+    this.geom = g;
+    this.mat = new THREE.ShaderMaterial({
+      vertexShader: SPRITE_VERT, fragmentShader: SPRITE_FRAG,
+      defines: additive ? { ADDITIVE: 1 } : {},
+      uniforms: { uTime: { value: 0 }, uMap: { value: map }, uGrow: { value: grow }, uOpacity: { value: opacity } },
+      transparent: true,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: false, fog: false,
+    });
+    const pts = new THREE.Points(g, this.mat);
+    pts.frustumCulled = false;
+    pts.renderOrder = additive ? 9 : 8;
+    scene.add(pts);
+    this.time = 0;
+    this.dirty = false;
+  }
+  spawn(pos, vel, { life = 1, size = 3, color = [1, 1, 1], grav = 0, spin = 0, rot = null } = {}) {
+    const i = this.cursor;
+    this.cursor = (this.cursor + 1) % this.cap;
+    const A = this.attrs;
+    A.position[i * 3] = pos.x; A.position[i * 3 + 1] = pos.y; A.position[i * 3 + 2] = pos.z;
+    A.aVel[i * 3] = vel.x; A.aVel[i * 3 + 1] = vel.y; A.aVel[i * 3 + 2] = vel.z;
+    A.aBirth[i] = this.time;
+    A.aLife[i] = life;
+    A.aSize[i] = size;
+    A.aColor[i * 3] = color[0]; A.aColor[i * 3 + 1] = color[1]; A.aColor[i * 3 + 2] = color[2];
+    A.aGrav[i] = grav;
+    A.aRot[i] = rot === null ? Math.random() * Math.PI * 2 : rot;
+    A.aSpin[i] = spin;
+    this.dirty = true;
+  }
+  update(time) {
+    this.time = time;
+    this.mat.uniforms.uTime.value = time;
+    if (this.dirty) {
+      for (const key in this.attrs) this.geom.attributes[key].needsUpdate = true;
+      this.dirty = false;
+    }
+  }
+  reset() {
+    this.attrs.aBirth.fill(-1000);
+    this.geom.attributes.aBirth.needsUpdate = true;
+  }
+}
+
 export class FX {
   constructor(scene, softDotTex) {
     this.scene = scene;
@@ -321,6 +428,125 @@ export class FX {
     this.emitters = [];        // {pos, rate, acc, opts}
     this.globalEmbers = false;
     this.emberAcc = 0;
+
+    // 외부 에셋 풀 (applyExternalAssets 이후 활성)
+    this.sparkPool = null;
+    this.smokePool = null;
+    this.firePool = null;
+    this.smokeEmitters = [];   // {pos, rate, acc}
+    this.muzzles = [];         // 방사형 플래시 빌보드 풀
+    this.scorches = [];        // 그을음 데칼 풀
+  }
+
+  // ── CC0 스프라이트 에셋 연결 — 실패 시 게임은 절차적 이펙트로 그대로 동작 ──
+  applyExternalAssets(assets) {
+    const T = assets.tex;
+    if (T.star) this.sparkPool = new SpritePool(this.scene, T.star, { capacity: 512, additive: true, grow: 0 });
+    if (T.smoke) this.smokePool = new SpritePool(this.scene, T.smoke, { capacity: 320, additive: false, grow: 0.9, opacity: 0.3 });
+    if (T.flamePuff) this.firePool = new SpritePool(this.scene, T.flamePuff, { capacity: 256, additive: true, grow: 0.3 });
+
+    if (T.muzzle) {
+      for (let i = 0; i < 4; i++) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: T.muzzle, transparent: true, blending: THREE.AdditiveBlending,
+          depthWrite: false, fog: false,
+        });
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+        m.visible = false;
+        m.renderOrder = 10;
+        this.scene.add(m);
+        this.muzzles.push({ mesh: m, t: 1, dur: 0.22, size: 4 });
+      }
+    }
+    if (T.scorch) {
+      for (let i = 0; i < 6; i++) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: T.scorch, transparent: true, color: 0x090909,
+          depthWrite: false, fog: false, opacity: 0,
+        });
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+        m.rotation.x = -Math.PI / 2;
+        m.visible = false;
+        m.renderOrder = 3;
+        this.scene.add(m);
+        this.scorches.push({ mesh: m, t: 1, dur: 7 });
+      }
+    }
+    if (T.magic) {
+      // 텔레그래프 데칼에 회전 마법진 오버레이 장착
+      for (const d of this.decals) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: T.magic, transparent: true, blending: THREE.AdditiveBlending,
+          depthWrite: false, fog: false, opacity: 0,
+        });
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.7), mat);
+        m.rotation.x = -Math.PI / 2;
+        m.renderOrder = 6;
+        d.mesh.add(m);
+        d.magic = m;
+      }
+    }
+  }
+
+  // ── Rich 이펙트 헬퍼 (풀 없으면 조용히 무시 — 호출부는 무조건 불러도 됨) ──
+  sparks(pos, count = 10, color = [4, 2.8, 1.2], speed = 7) {
+    if (!this.sparkPool) return;
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2, el = (Math.random() - 0.3) * 1.3;
+      const s = speed * (0.4 + Math.random() * 0.9);
+      this.sparkPool.spawn(pos,
+        { x: Math.cos(a) * Math.cos(el) * s, y: Math.sin(el) * s + 2, z: Math.sin(a) * Math.cos(el) * s },
+        { life: 0.3 + Math.random() * 0.35, size: 2.6 + Math.random() * 2, color, grav: 16, spin: (Math.random() - 0.5) * 14 });
+    }
+  }
+  smokePuff(pos, count = 6, { size = 2.8, color = [0.045, 0.045, 0.055], up = 1.6, spread = 2.2, life = 2.2 } = {}) {
+    if (!this.smokePool) return;
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * spread;
+      this.smokePool.spawn(
+        { x: pos.x + Math.cos(a) * r * 0.4, y: pos.y + Math.random() * 0.5, z: pos.z + Math.sin(a) * r * 0.4 },
+        { x: Math.cos(a) * r * 0.5, y: up * (0.6 + Math.random() * 0.8), z: Math.sin(a) * r * 0.5 },
+        { life: life * (0.7 + Math.random() * 0.6), size: size * (0.7 + Math.random() * 0.7), color, grav: -0.15, spin: (Math.random() - 0.5) * 1.6 });
+    }
+  }
+  firePuffs(pos, count = 8, { size = 3.2, up = 3.5, life = 0.55 } = {}) {
+    if (!this.firePool) return;
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 0.9;
+      this.firePool.spawn(
+        { x: pos.x + Math.cos(a) * r, y: pos.y + Math.random() * 0.6, z: pos.z + Math.sin(a) * r },
+        { x: Math.cos(a) * 1.2, y: up * (0.6 + Math.random() * 0.8), z: Math.sin(a) * 1.2 },
+        { life: life * (0.7 + Math.random() * 0.7), size: size * (0.7 + Math.random() * 0.6), color: [3.4, 1.5, 0.4], grav: -1.5, spin: (Math.random() - 0.5) * 5 });
+    }
+  }
+  muzzleFlash(pos, color = [3, 1.6, 0.6], size = 4, dur = 0.2) {
+    const f = this.muzzles.find(m => m.t >= 1) || this.muzzles[0];
+    if (!f) return;
+    f.t = 0; f.dur = dur; f.size = size;
+    f.mesh.visible = true;
+    f.mesh.position.copy(pos);
+    f.mesh.material.color.setRGB(color[0], color[1], color[2]);
+    f.mesh.material.rotation = 0;
+    f.mesh.rotation.z = Math.random() * Math.PI * 2;
+  }
+  scorch(pos, r = 3) {
+    const s = this.scorches.find(s => s.t >= 1) || this.scorches[0];
+    if (!s) return;
+    s.t = 0;
+    s.mesh.visible = true;
+    s.mesh.position.set(pos.x, 0.045 + Math.random() * 0.01, pos.z);
+    s.mesh.rotation.z = Math.random() * Math.PI * 2;
+    s.mesh.scale.setScalar(r);
+  }
+  // 대형 착탄 종합 연출
+  richImpact(pos, { r = 4, color = [3.2, 1.5, 0.5], sparkCount = 16, smokeCount = 5 } = {}) {
+    this.muzzleFlash({ x: pos.x, y: pos.y + 0.9, z: pos.z }, color, r * 1.5);
+    this.sparks({ x: pos.x, y: pos.y + 0.6, z: pos.z }, sparkCount, [4, 2.6, 1]);
+    this.smokePuff(pos, smokeCount, { size: r * 0.8, spread: r * 0.6 });
+    this.scorch(pos, r * 1.15);
+  }
+  addSmokeEmitter(pos, rate) {
+    this.smokeEmitters.push({ pos, rate, acc: Math.random() });
   }
 
   // ── 파티클 스폰 (직접 인덱스 쓰기 — 임시 배열 할당 없음) ──
@@ -426,9 +652,42 @@ export class FX {
 
   setGlobalEmbers(on) { this.globalEmbers = on; }
 
-  update(gameDt, rawDt, gameTime) {
+  update(gameDt, rawDt, gameTime, camera) {
     this.time = gameTime;
     this.partMat.uniforms.uTime.value = gameTime;
+
+    // 텍스처 스프라이트 풀
+    this.sparkPool?.update(gameTime);
+    this.smokePool?.update(gameTime);
+    this.firePool?.update(gameTime);
+    // 상시 연기 이미터 (화로 등)
+    if (this.smokePool) {
+      for (const e of this.smokeEmitters) {
+        e.acc += gameDt * e.rate;
+        while (e.acc >= 1) {
+          e.acc -= 1;
+          this.smokePool.spawn(
+            { x: e.pos.x + (Math.random() - 0.5) * 0.4, y: e.pos.y, z: e.pos.z + (Math.random() - 0.5) * 0.4 },
+            { x: (Math.random() - 0.5) * 0.3, y: 0.9 + Math.random() * 0.6, z: (Math.random() - 0.5) * 0.3 },
+            { life: 2.4 + Math.random() * 1.4, size: 1.3 + Math.random() * 0.8, color: [0.04, 0.04, 0.05], grav: -0.2, spin: (Math.random() - 0.5) * 1.2 });
+        }
+      }
+    }
+    // 머즐 플래시 (카메라 빌보드)
+    for (const f of this.muzzles) {
+      if (f.t >= 1) { f.mesh.visible = false; continue; }
+      f.t = Math.min(1, f.t + gameDt / f.dur);
+      const e = 1 - Math.pow(1 - f.t, 2);
+      f.mesh.scale.setScalar(f.size * (0.45 + e * 0.75));
+      f.mesh.material.opacity = 1 - f.t;
+      if (camera) f.mesh.quaternion.copy(camera.quaternion);
+    }
+    // 그을음 페이드
+    for (const s of this.scorches) {
+      if (s.t >= 1) { s.mesh.visible = false; continue; }
+      s.t = Math.min(1, s.t + gameDt / s.dur);
+      s.mesh.material.opacity = 0.85 * (1 - s.t) * Math.min(1, s.t * 18 + 0.2);
+    }
 
     // 상시 이미터 (화로 잿불)
     for (const e of this.emitters) {
@@ -469,9 +728,9 @@ export class FX {
       r.t = Math.min(1, r.t + gameDt / r.dur);
       r.mesh.material.uniforms.uT.value = r.t;
     }
-    // 데칼
+    // 데칼 (+ 회전 마법진 오버레이)
     for (const d of this.decals) {
-      if (!d.active) continue;
+      if (!d.active) { if (d.magic) d.magic.material.opacity = 0; continue; }
       d.t += gameDt;
       const u = d.mesh.material.uniforms;
       if (d.t < d.dur) {
@@ -482,6 +741,12 @@ export class FX {
       } else {
         d.active = false;
         d.mesh.visible = false;
+      }
+      if (d.magic && d.active) {
+        d.magic.rotation.z += gameDt * 1.7;
+        const c = u.uColor.value;
+        d.magic.material.color.setRGB(c.r * 0.55, c.g * 0.55, c.b * 0.55);
+        d.magic.material.opacity = 0.28 + 0.55 * (d.t / d.dur);
       }
     }
     // 플래시
@@ -512,5 +777,10 @@ export class FX {
     for (const g of this.ghosts) { g.t = 1; for (const e of g.entries) e.ghost.visible = false; }
     for (const m of [...this.crescents, ...this.fireballs, ...this.fireCols]) m.visible = false;
     this.globalEmbers = false;
+    this.sparkPool?.reset();
+    this.smokePool?.reset();
+    this.firePool?.reset();
+    for (const f of this.muzzles) { f.t = 1; f.mesh.visible = false; }
+    for (const s of this.scorches) { s.t = 1; s.mesh.visible = false; }
   }
 }
