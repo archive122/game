@@ -353,7 +353,7 @@ export class Hero {
     [joints.thighR, joints.shinR] = mkLeg(1);
 
     // 캐릭터 필 라이트 — 어디서든 실루엣이 읽히도록 (그림자 없음, 저강도)
-    const fill = new THREE.PointLight(0x6f87ad, 3.2, 6.5, 1.6);
+    const fill = new THREE.PointLight(0x6f87ad, 4.0, 7, 1.6);
     fill.position.set(0, 2.3, 0);
     this.root.add(fill);
 
@@ -558,8 +558,9 @@ export class Hero {
     const ix = input.x, iz = input.z;
     const moving = (ix !== 0 || iz !== 0);
     const psi = camYaw + Math.PI;              // 카메라 전방각
-    const wx = Math.sin(psi) * iz + Math.cos(psi) * ix;
-    const wz = Math.cos(psi) * iz - Math.sin(psi) * ix;
+    // 전방 F=(sinψ,cosψ), 오른쪽 R=F×U=(-cosψ,sinψ) — D(ix=+1)가 화면 오른쪽
+    const wx = Math.sin(psi) * iz - Math.cos(psi) * ix;
+    const wz = Math.cos(psi) * iz + Math.sin(psi) * ix;
     const moveDir = this._mv.set(wx, 0, wz);
     if (moveDir.lengthSq() > 1) moveDir.normalize();
 

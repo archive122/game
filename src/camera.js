@@ -96,9 +96,9 @@ export class GameCamera {
         .add(this._v3.set(0, C.height, 0))
         .addScaledVector(dir, C.distance)
         .addScaledVector(side, C.shoulder);
-      // 아레나 밖으로 나가지 않게
+      // 외벽(r=21.5) 안쪽으로 제한 — 카메라가 벽 뒤로 나가 캐릭터가 가려지는 것 방지
       const r = Math.hypot(this.pos.x, this.pos.z);
-      if (r > 22.2) { this.pos.x *= 22.2 / r; this.pos.z *= 22.2 / r; }
+      if (r > 20.4) { this.pos.x *= 20.4 / r; this.pos.z *= 20.4 / r; }
       if (this.pos.y < 0.35) this.pos.y = 0.35;
 
       this.lookTarget.copy(heroPos).add(this._v3.set(0, 1.45, 0));
